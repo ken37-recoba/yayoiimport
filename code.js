@@ -1,23 +1,32 @@
-/****************************************************************
- * 領収書OCRシステム (弥生会計連携/全機能搭載)
- * セキュリティ対策・プレビュー機能修正版
- ****************************************************************/
+/**************************************************************************************************
+ * * 領収書OCRシステム (v2.0 Refactored)
+ * * 概要:
+ * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
+ * AIによる勘定科目推測、ユーザー学習機能、弥生会計用CSVエクスポート機能などを提供します。
+ * * このバージョンについて:
+ * - 目的: 機能追加の容易化、メンテナンス性の向上、コードのシンプル化
+ * - 変更点:
+ * - 機能ごとに関数をグループ化し、コードの構造を整理しました。
+ * - 設定値や固定文字列を`CONFIG`オブジェクトに集約し、変更を容易にしました。
+ * - APIキーは引き続きスクリプトプロパティで安全に管理します。
+ * **************************************************************************************************/
+
+
+/**************************************************************************************************
+ * 1. グローバル設定 (Global Settings)
+ * * このセクションでは、スクリプト全体で使用する設定値や定数を一元管理します。
+ * IDの変更やシート名、CSVの固定値などを変更する場合は、この`CONFIG`オブジェクトを編集してください。
+ **************************************************************************************************/
 const CONFIG = {
-  //【要設定】スプレッドシートのID (URLから取得)
-  SPREADSHEET_ID: '1BpqUIgIV-PkeimeJa05x4yFJqKe4UpHhS9-5cubZ1cw', // ご自身のIDに書き換えてください
+  // --- 基本設定 (ユーザーによる設定が必須) ---
+  SPREADSHEET_ID: '1BpqUIgIV-PkeimeJa05x4yFJqKe4UpHhS9-5cubZ1cw', // ご自身のスプレッドシートIDに書き換えてください
+  SOURCE_FOLDER_ID: '1x6k_iC7ws8YyMW31DgQKtObWbDddKair', // 領収書をアップロードするフォルダのID
+  EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8', // 弥生会計用CSVを出力するフォルダのID
 
-  //【要設定】最初に領収書をアップロードするフォルダのID
-  SOURCE_FOLDER_ID: '1x6k_iC7ws8YyMW31DgQKtObWbDddKair', // ご自身のIDに書き換えてください
-  
-  //【要設定】弥生会計用CSVを出力するフォルダのID
-  EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
+  // --- 実行制御 ---
+  EXECUTION_TIME_LIMIT_SECONDS: 300, // タイムアウトを防ぐための実行時間上限 (秒)
 
-  // APIキーは「プロジェクトの設定」>「スクリプトプロパティ」で管理します。
-
-  // 実行時間対策：スクリプトの実行を安全に停止するまでの秒数 (5分 = 300秒)
-  EXECUTION_TIME_LIMIT_SECONDS: 300,
-
-  // 以下は自動生成されるフォルダ・シートの名前（変更可）
+  // --- フォルダ・シート名 ---
   ARCHIVE_FOLDER_NAME: '[OCR] アーカイブ済み',
   FILE_LIST_SHEET: 'ファイルリスト',
   OCR_RESULT_SHEET: 'OCR結果',
@@ -25,12 +34,40 @@ const CONFIG = {
   MASTER_SHEET: '勘定科目マスター',
   LEARNING_SHEET: '学習データ',
 
-  // Gemini API設定 (読取り精度に関わるため変更しないでください)
+  // --- Gemini API 設定 (読取り精度に関わるため変更非推奨) ---
   GEMINI_MODEL: 'gemini-2.5-flash-preview-05-20',
   THINKING_BUDGET: 10000,
+
+  // --- 弥生会計CSVエクスポート設定 ---
+  YAYOI: {
+    SHIKIBETSU_FLAG: '2000',
+    KASHIKATA_KAMOKU: '役員借入金',
+    KASHIKATA_ZEIKUBUN: '対象外',
+    KASHIKATA_ZEIGAKU: '0',
+    TORIHIKI_TYPE: '0',
+    CHOUSEI: 'no',
+    CSV_COLUMNS: [ // 弥生会計の列定義
+      '識別フラグ', '伝票NO', '決算整理仕訳', '取引日付', '借方勘定科目', '借方補助科目', '借方部門', 
+      '借方税区分', '借方金額', '借方税金額', '貸方勘定科目', '貸方補助科目', '貸方部門', 
+      '貸方税区分', '貸方金額', '貸方税金額', '摘要', '手形番号', '手形期日', '取引タイプ',
+      '生成元', '仕訳メモ', '付箋1', '付箋2', '調整'
+    ],
+  },
+
+  // --- スプレッドシートのヘッダー定義 ---
+  HEADERS: {
+    FILE_LIST: ['ファイルID', 'ファイル名', 'ステータス', 'エラー詳細', '登録日時'],
+    OCR_RESULT: [
+      '取引ID', '処理日時', '取引日', '店名', '摘要', '勘定科目', '補助科目', 
+      '税率(%)', '金額(税込)', 'うち消費税', '登録番号', 
+      '消費税課税区分コード', 'ファイルへのリンク', '備考', '学習チェック'
+    ],
+    TOKEN_LOG: ['日時', 'ファイル名', '入力トークン', '思考トークン', '出力トークン', '合計トークン'],
+    LEARNING: ['学習登録日時', '店名', '摘要', '勘定科目', '補助科目', '取引ID'],
+  },
 };
 
-// 状態管理用の定数
+// 処理ステータスを管理する定数
 const STATUS = {
   PENDING: '未処理',
   PROCESSING: '処理中',
@@ -39,9 +76,16 @@ const STATUS = {
 };
 
 
-/****************************************************************
- * メイン処理 & トリガー用関数
- ****************************************************************/
+/**************************************************************************************************
+ * 2. セットアップ & メインプロセス (Setup & Main Process)
+ * * スクリプトの起動点となる関数群です。
+ * onOpenでメニューを作成し、onEditでシート上の編集イベントを監視します。
+ * mainProcessが全体の処理フローを統括します。
+ **************************************************************************************************/
+
+/**
+ * スプレッドシートを開いた時にカスタムメニューを追加します。
+ */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('領収書OCR')
@@ -58,7 +102,10 @@ function onOpen() {
 }
 
 /**
- * チェックボックスのON/OFFや登録番号の削除をトリガーに関数を実行する
+ * ユーザーがシートを編集した際のイベントを処理します。
+ * - 「学習チェック」のON/OFF
+ * - 「登録番号」の削除
+ * @param {Object} e - イベントオブジェクト
  */
 function onEdit(e) {
   try {
@@ -76,69 +123,24 @@ function onEdit(e) {
     const taxCodeColIndex = headers.indexOf('登録番号') + 1;
     const transactionIdColIndex = headers.indexOf('取引ID') + 1;
 
-    // --- Case 1: 「学習チェック」列が編集された場合 ---
+    // 「学習チェック」列が編集された場合の処理
     if (col === learnCheckColIndex) {
-      const transactionId = sheet.getRange(row, transactionIdColIndex).getValue();
-      if (!transactionId) return; 
-      
-      const isChecked = range.isChecked();
-      
-      if (isChecked) { // 学習登録
-        if (range.getNote().includes('学習済み')) return;
-        
-        const learningSheet = getSheet(CONFIG.LEARNING_SHEET);
-        const dataRow = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
-        
-        const storeName = dataRow[headers.indexOf('店名')];
-        const description = dataRow[headers.indexOf('摘要')];
-        const kanjo = dataRow[headers.indexOf('勘定科目')];
-        const hojo = dataRow[headers.indexOf('補助科目')];
-
-        learningSheet.appendRow([new Date(), storeName, description, kanjo, hojo, transactionId]);
-        
-        range.setNote(`学習済み (ID: ${transactionId})`);
-        sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground('#e6f4ea');
-        SpreadsheetApp.getActiveSpreadsheet().toast(`「${storeName}」の勘定科目を学習しました。`);
-      
-      } else { // 学習取消
-        const learningSheet = getSheet(CONFIG.LEARNING_SHEET);
-        if (!learningSheet || learningSheet.getLastRow() < 2) return;
-
-        const learningData = learningSheet.getRange(2, 1, learningSheet.getLastRow() - 1, 6).getValues();
-        const learningIdCol = 5; 
-        
-        for (let i = learningData.length - 1; i >= 0; i--) {
-          if (learningData[i][learningIdCol] === transactionId) {
-            learningSheet.deleteRow(i + 2);
-            range.clearNote();
-            sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground(null);
-            SpreadsheetApp.getActiveSpreadsheet().toast(`取引ID ${transactionId} の学習データを取り消しました。`);
-            return;
-          }
-        }
-      }
+      handleLearningCheck(sheet, row, col, headers);
     }
 
-    // --- Case 2: 「登録番号」列が削除（空に）された場合 ---
+    // 「登録番号」列が空にされた場合の処理
     if (col === taxCodeColIndex && range.isBlank()) {
-      range.setFontColor(null); 
-      
-      const taxRateColIndex = headers.indexOf('税率(%)') + 1;
-      const taxCategoryColIndex = headers.indexOf('消費税課税区分コード') + 1;
-
-      if (taxRateColIndex > 0 && taxCategoryColIndex > 0) {
-        const taxRate = sheet.getRange(row, taxRateColIndex).getValue();
-        const newTaxCategory = getTaxCategoryCode(taxRate, ""); 
-        sheet.getRange(row, taxCategoryColIndex).setValue(newTaxCategory);
-        SpreadsheetApp.getActiveSpreadsheet().toast(`行 ${row} の登録番号が削除されたため、税区分を更新しました。`);
-      }
+      handleTaxCodeRemoval(sheet, row, headers);
     }
   } catch (err) {
     console.error("onEdit Error: " + err.toString());
-    SpreadsheetApp.getActiveSpreadsheet().toast("エラーが発生しました: " + err.message);
+    showError('onEdit実行中にエラーが発生しました: ' + err.message);
   }
 }
 
+/**
+ * システムのメイン処理を開始します。
+ */
 function mainProcess() {
   const startTime = new Date();
   console.log('メインプロセスを開始します。');
@@ -148,140 +150,43 @@ function mainProcess() {
   console.log('メインプロセスが完了しました。');
 }
 
-
 /**
- * 選択された行をOCR結果シートと学習データシートから安全に削除する関数
+ * スクリプト実行に必要なフォルダやシートを準備します。
  */
-function deleteSelectedTransactions() {
-  const ui = SpreadsheetApp.getUi();
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
-  
-  if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.OCR_RESULT_SHEET) {
-    ui.alert('この機能は「OCR結果」シートでのみ使用できます。');
-    return;
-  }
-  
-  const range = sheet.getActiveRange();
-  const startRow = range.getRow();
-  
-  if (startRow <= 1) {
-      ui.alert('ヘッダー行は削除できません。データ行を選択してください。');
-      return;
-  }
-  
-  const response = ui.alert(
-    '選択した取引の削除',
-    `選択中の ${range.getNumRows()} 件の取引を削除しますか？\n\n学習済みの取引が含まれている場合、関連する学習データも完全に削除されます。この操作は元に戻せません。`,
-    ui.ButtonSet.OK_CANCEL
-  );
+function initializeEnvironment() {
+  console.log('環境の初期化を確認・実行します...');
+  getFolderByName(CONFIG.ARCHIVE_FOLDER_NAME, true);
 
-  if (response !== ui.Button.OK) {
-    return;
-  }
+  createSheetWithHeaders(CONFIG.FILE_LIST_SHEET, CONFIG.HEADERS.FILE_LIST);
+  createSheetWithHeaders(CONFIG.OCR_RESULT_SHEET, CONFIG.HEADERS.OCR_RESULT, true);
+  createSheetWithHeaders(CONFIG.TOKEN_LOG_SHEET, CONFIG.HEADERS.TOKEN_LOG);
+  createSheetWithHeaders(CONFIG.LEARNING_SHEET, CONFIG.HEADERS.LEARNING);
 
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const transactionIdColIndex = headers.indexOf('取引ID') + 1;
-
-  const transactionIdsToDelete = [];
-  const fullRange = sheet.getRange(startRow, 1, range.getNumRows(), sheet.getLastColumn());
-  const selectedRows = fullRange.getValues();
-
-  for(let i = 0; i < selectedRows.length; i++){
-      const id = selectedRows[i][transactionIdColIndex -1];
-      if (id) {
-          transactionIdsToDelete.push(id);
-      }
-  }
-  
-  const learningSheet = getSheet(CONFIG.LEARNING_SHEET);
-  let learnedDeletedCount = 0;
-  if (learningSheet && learningSheet.getLastRow() > 1) {
-    const learningData = learningSheet.getRange(2, 1, learningSheet.getLastRow() - 1, 6).getValues();
-    const learningIdCol = 5;
-
-    for (let i = learningData.length - 1; i >= 0; i--) {
-        if(transactionIdsToDelete.includes(learningData[i][learningIdCol])){
-            learningSheet.deleteRow(i + 2);
-            learnedDeletedCount++;
-        }
-    }
-  }
-
-  sheet.deleteRows(startRow, range.getNumRows());
-  
-  ui.alert('処理完了', `${range.getNumRows()}件の取引を削除しました。\n(うち、${learnedDeletedCount}件の学習データも関連して削除されました。)`, ui.ButtonSet.OK);
+  console.log('環境の初期化が完了しました。');
 }
 
-/**
- * 選択された行にダミーのインボイス番号を挿入し、税区分コードを更新する
- */
-function insertDummyInvoiceNumber() {
-  const ui = SpreadsheetApp.getUi();
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
 
-  if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.OCR_RESULT_SHEET) {
-    ui.alert('この機能は「OCR結果」シートでのみ使用できます。');
-    return;
-  }
-  
-  const range = sheet.getActiveRange();
-  if (range.getRow() <= 1) {
-    ui.alert('ヘッダー行には適用できません。データ行を選択してください。');
-    return;
-  }
-
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  const taxCodeColIndex = headers.indexOf('登録番号') + 1;
-  const taxRateColIndex = headers.indexOf('税率(%)') + 1;
-  const taxCategoryColIndex = headers.indexOf('消費税課税区分コード') + 1;
-
-  if (taxCodeColIndex === 0 || taxRateColIndex === 0 || taxCategoryColIndex === 0) {
-    ui.alert('必要な列（登録番号、税率(%)、消費税課税区分コード）が見つかりません。');
-    return;
-  }
-
-  let updatedCount = 0;
-  const startRow = range.getRow();
-
-  for (let i = 0; i < range.getNumRows(); i++) {
-    const currentRow = startRow + i;
-    const taxCodeCell = sheet.getRange(currentRow, taxCodeColIndex);
-    
-    if (taxCodeCell.isBlank()) {
-      const dummyNumber = 'T' + Math.random().toString().slice(2,15);
-      taxCodeCell.setValue(dummyNumber)
-                 .setFontColor("#0000FF"); 
-
-      const taxRate = sheet.getRange(currentRow, taxRateColIndex).getValue();
-      const newTaxCategory = getTaxCategoryCode(taxRate, dummyNumber);
-      
-      sheet.getRange(currentRow, taxCategoryColIndex).setValue(newTaxCategory);
-      updatedCount++;
-    }
-  }
-
-  if (updatedCount > 0) {
-    ui.alert('処理完了', `${updatedCount}件の取引にダミーの登録番号を挿入し、税区分を更新しました。`, ui.ButtonSet.OK);
-  } else {
-    ui.alert('処理対象なし', '選択された行に、登録番号が空欄の取引はありませんでした。', ui.ButtonSet.OK);
-  }
-}
+/**************************************************************************************************
+ * 3. ユーザーインターフェース (UI) - メニュー機能
+ * * カスタムメニューから呼び出される関数群です。
+ * ユーザーとの対話（ダイアログ表示、ファイル出力など）を担当します。
+ **************************************************************************************************/
 
 /**
- * 選択された行を弥生会計インポート用のCSVとしてエクスポートする
+ * 選択された行を弥生会計インポート用のCSVとしてエクスポートします。
  */
 function exportForYayoi() {
     const ui = SpreadsheetApp.getUi();
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
 
     if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.OCR_RESULT_SHEET) {
-        ui.alert('この機能は「OCR結果」シートでのみ使用できます。');
+        showError('この機能は「OCR結果」シートでのみ使用できます。');
         return;
     }
 
     const range = sheet.getActiveRange();
     if (range.getRow() <= 1) {
-        ui.alert('ヘッダー行はエクスポートできません。データ行を選択してください。');
+        showError('ヘッダー行はエクスポートできません。データ行を選択してください。');
         return;
     }
 
@@ -291,48 +196,40 @@ function exportForYayoi() {
         ui.ButtonSet.OK_CANCEL
     );
 
-    if (response !== ui.Button.OK) {
-        return;
-    }
+    if (response !== ui.Button.OK) return;
     
-    const startRow = range.getRow();
-    const numRows = range.getNumRows();
-    const lastCol = sheet.getLastColumn();
-    const fullWidthRange = sheet.getRange(startRow, 1, numRows, lastCol);
+    const fullWidthRange = sheet.getRange(range.getRow(), 1, range.getNumRows(), sheet.getLastColumn());
     const selectedData = fullWidthRange.getDisplayValues(); 
 
+    const headers = CONFIG.HEADERS.OCR_RESULT;
     const COL = {
-        TRANSACTION_DATE: 2,
-        STORE_NAME: 3,
-        DESCRIPTION: 4,
-        ACCOUNT_TITLE: 5,
-        SUB_ACCOUNT: 6,
-        AMOUNT_INCL_TAX: 8,
-        TAX_AMOUNT: 9,
-        TAX_CATEGORY: 11,
+        TRANSACTION_DATE: headers.indexOf('取引日'),
+        STORE_NAME: headers.indexOf('店名'),
+        DESCRIPTION: headers.indexOf('摘要'),
+        ACCOUNT_TITLE: headers.indexOf('勘定科目'),
+        SUB_ACCOUNT: headers.indexOf('補助科目'),
+        AMOUNT_INCL_TAX: headers.indexOf('金額(税込)'),
+        TAX_AMOUNT: headers.indexOf('うち消費税'),
+        TAX_CATEGORY: headers.indexOf('消費税課税区分コード'),
     };
 
-    const csvData = [];
-    
-    selectedData.forEach(row => {
-        const csvRow = new Array(25).fill(''); 
-
-        csvRow[0]  = '2000';
+    const csvData = selectedData.map(row => {
+        const csvRow = new Array(CONFIG.YAYOI.CSV_COLUMNS.length).fill(''); 
+        csvRow[0]  = CONFIG.YAYOI.SHIKIBETSU_FLAG;
         csvRow[3]  = row[COL.TRANSACTION_DATE];
         csvRow[4]  = row[COL.ACCOUNT_TITLE];
         csvRow[5]  = row[COL.SUB_ACCOUNT];
         csvRow[7]  = row[COL.TAX_CATEGORY];
         csvRow[8]  = row[COL.AMOUNT_INCL_TAX];
         csvRow[9]  = row[COL.TAX_AMOUNT];
-        csvRow[10] = '役員借入金';
-        csvRow[13] = '対象外';
+        csvRow[10] = CONFIG.YAYOI.KASHIKATA_KAMOKU;
+        csvRow[13] = CONFIG.YAYOI.KASHIKATA_ZEIKUBUN;
         csvRow[14] = row[COL.AMOUNT_INCL_TAX];
-        csvRow[15] = '0';
+        csvRow[15] = CONFIG.YAYOI.KASHIKATA_ZEIGAKU;
         csvRow[16] = `${row[COL.STORE_NAME]} / ${row[COL.DESCRIPTION]}`;
-        csvRow[19] = '0';
-        csvRow[24] = 'no';
-
-        csvData.push(csvRow);
+        csvRow[19] = CONFIG.YAYOI.TORIHIKI_TYPE;
+        csvRow[24] = CONFIG.YAYOI.CHOUSEI;
+        return csvRow;
     });
 
     try {
@@ -343,21 +240,196 @@ function exportForYayoi() {
         const blob = Utilities.newBlob('', MimeType.CSV, fileName).setDataFromString(csvString, 'Shift_JIS');
         
         exportFolder.createFile(blob);
-
         fullWidthRange.setBackground('#f3f3f3'); 
         
         ui.alert('エクスポート完了', `「${fileName}」をGoogle Driveの指定フォルダに出力しました。`, ui.ButtonSet.OK);
-
     } catch(e) {
         console.error("CSVエクスポート中にエラー: " + e.toString());
-        ui.alert('エクスポート失敗', 'CSVファイルの作成中にエラーが発生しました。\n\n・CONFIGの「EXPORT_FOLDER_ID」が正しいか\n・指定フォルダへのアクセス権があるか\n\nを確認してください。', ui.ButtonSet.OK);
+        showError('CSVファイルの作成中にエラーが発生しました。\n\n・CONFIGの「EXPORT_FOLDER_ID」が正しいか\n・指定フォルダへのアクセス権があるか\n\nを確認してください。');
     }
 }
 
+/**
+ * 選択された行の領収書画像をプレビュー表示します。
+ */
+function showReceiptPreview() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    const sheet = SpreadsheetApp.getActiveSheet();
+    if (sheet.getName() !== CONFIG.OCR_RESULT_SHEET) {
+      showError('この機能は「OCR結果」シートで実行してください。');
+      return;
+    }
 
-/****************************************************************
- * ステップ1: 新規ファイルの取り込みとリスト化
- ****************************************************************/
+    const range = sheet.getActiveRange();
+    const startRow = range.getRow();
+    if (startRow <= 1) {
+      showError('データ行を選択してください。');
+      return;
+    }
+    
+    const fileId = getFileIdFromCell(sheet, startRow);
+    if (!fileId) return; // エラーはgetFileIdFromCell内で表示
+    
+    const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
+    htmlTemplate.fileId = fileId;
+
+    const htmlOutput = htmlTemplate.evaluate().setWidth(700).setHeight(800);
+    ui.showModalDialog(htmlOutput, `領収書プレビュー`);
+
+  } catch (e) {
+    console.error('プレビュー表示中にエラーが発生しました: ' + e.toString());
+    showError('プレビューの表示中にエラーが発生しました。\n\n詳細: ' + e.message);
+  }
+}
+
+/**
+ * 選択された取引データを削除します。学習データも連動して削除します。
+ */
+function deleteSelectedTransactions() {
+  const ui = SpreadsheetApp.getUi();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
+  
+  if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.OCR_RESULT_SHEET) {
+    showError('この機能は「OCR結果」シートでのみ使用できます。');
+    return;
+  }
+  
+  const range = sheet.getActiveRange();
+  const startRow = range.getRow();
+  
+  if (startRow <= 1) {
+    showError('ヘッダー行は削除できません。データ行を選択してください。');
+    return;
+  }
+  
+  const response = ui.alert(
+    '選択した取引の削除',
+    `選択中の ${range.getNumRows()} 件の取引を削除しますか？\n\n学習済みの取引が含まれている場合、関連する学習データも完全に削除されます。この操作は元に戻せません。`,
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response !== ui.Button.OK) return;
+
+  const headers = CONFIG.HEADERS.OCR_RESULT;
+  const transactionIdColIndex = headers.indexOf('取引ID');
+
+  const fullRange = sheet.getRange(startRow, 1, range.getNumRows(), sheet.getLastColumn());
+  const selectedRows = fullRange.getValues();
+
+  const transactionIdsToDelete = selectedRows.map(row => row[transactionIdColIndex]).filter(id => id);
+  
+  let learnedDeletedCount = 0;
+  if (transactionIdsToDelete.length > 0) {
+    learnedDeletedCount = deleteLearningDataByIds(transactionIdsToDelete);
+  }
+
+  sheet.deleteRows(startRow, range.getNumRows());
+  
+  ui.alert('処理完了', `${range.getNumRows()}件の取引を削除しました。\n(うち、${learnedDeletedCount}件の学習データも関連して削除されました。)`, ui.ButtonSet.OK);
+}
+
+/**
+ * 選択された行にダミーのインボイス番号を挿入します。
+ */
+function insertDummyInvoiceNumber() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
+  
+  if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.OCR_RESULT_SHEET) {
+    showError('この機能は「OCR結果」シートでのみ使用できます。');
+    return;
+  }
+  
+  const range = sheet.getActiveRange();
+  if (range.getRow() <= 1) {
+    showError('ヘッダー行には適用できません。データ行を選択してください。');
+    return;
+  }
+
+  const headers = CONFIG.HEADERS.OCR_RESULT;
+  const taxCodeCol = headers.indexOf('登録番号') + 1;
+  const taxRateCol = headers.indexOf('税率(%)') + 1;
+  const taxCategoryCol = headers.indexOf('消費税課税区分コード') + 1;
+
+  if ([taxCodeCol, taxRateCol, taxCategoryCol].includes(0)) {
+    showError('必要な列（登録番号、税率(%)、消費税課税区分コード）が見つかりません。');
+    return;
+  }
+
+  const dataRange = sheet.getRange(range.getRow(), 1, range.getNumRows(), sheet.getLastColumn());
+  const values = dataRange.getValues();
+  let updatedCount = 0;
+
+  values.forEach((row, i) => {
+    if (!row[taxCodeCol - 1]) { // 登録番号が空の場合
+      const dummyNumber = 'T' + Math.random().toString().slice(2, 15);
+      row[taxCodeCol - 1] = dummyNumber;
+      row[taxCategoryCol - 1] = getTaxCategoryCode(row[taxRateCol - 1], dummyNumber);
+      
+      const taxCodeCell = sheet.getRange(range.getRow() + i, taxCodeCol);
+      taxCodeCell.setValue(dummyNumber).setFontColor("#0000FF");
+      sheet.getRange(range.getRow() + i, taxCategoryCol).setValue(row[taxCategoryCol - 1]);
+      updatedCount++;
+    }
+  });
+
+  if (updatedCount > 0) {
+    SpreadsheetApp.getUi().alert('処理完了', `${updatedCount}件の取引にダミーの登録番号を挿入し、税区分を更新しました。`, SpreadsheetApp.getUi().ButtonSet.OK);
+  } else {
+    showError('処理対象なし', '選択された行に、登録番号が空欄の取引はありませんでした。');
+  }
+}
+
+/**
+ * OCR結果シートにフィルタを適用します。
+ */
+function activateFilter() {
+  const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
+  if (sheet) {
+    if (sheet.getFilter()) {
+      sheet.getFilter().remove();
+    }
+    sheet.getDataRange().createFilter();
+    SpreadsheetApp.getUi().alert('フィルタをオンにしました。');
+  }
+}
+
+/**
+ * HTML側から呼び出され、プレビュー用の画像データを返します。
+ * @param {string} fileId - Google DriveのファイルID
+ * @returns {object} {success: boolean, fileName: string, dataUrl: string} または {success: boolean, error: string}
+ */
+function getImageDataForPreview(fileId) {
+  try {
+    const file = DriveApp.getFileById(fileId);
+    const originalBlob = file.getBlob();
+    const imageBlob = (originalBlob.getContentType() === MimeType.PDF) 
+      ? originalBlob.getAs('image/png') 
+      : originalBlob;
+
+    const dataUrl = `data:${imageBlob.getContentType()};base64,${Utilities.base64Encode(imageBlob.getBytes())}`;
+    
+    return { 
+      success: true, 
+      fileName: file.getName(),
+      dataUrl: dataUrl 
+    };
+  } catch (e) {
+    console.error('画像データの取得中にエラー: ' + e.toString());
+    return { success: false, error: e.message };
+  }
+}
+
+
+/**************************************************************************************************
+ * 4. バックグラウンド処理 (Background Processing)
+ * * ファイルの検出、OCR実行、結果の記録など、システムのコアとなる自動処理群です。
+ * `mainProcess`から呼び出されます。
+ **************************************************************************************************/
+
+/**
+ * 指定フォルダ内の新規ファイルを検出し、ファイルリストシートに追加します。
+ */
 function processNewFiles() {
   console.log('ステップ1: 新規ファイルの処理を開始...');
   const sourceFolder = DriveApp.getFolderById(CONFIG.SOURCE_FOLDER_ID);
@@ -369,97 +441,77 @@ function processNewFiles() {
   while (files.hasNext()) {
     const file = files.next();
     const fileId = file.getId();
+
+    if (existingFileIds.includes(fileId)) continue;
+    
     const mimeType = file.getMimeType();
-
-    if (existingFileIds.includes(fileId)) {
-      continue;
-    }
-
     if (mimeType === MimeType.PDF || mimeType.startsWith('image/')) {
       try {
         console.log(`新規処理対象ファイルを発見: ${file.getName()}`);
         fileListSheet.appendRow([fileId, file.getName(), STATUS.PENDING, '', new Date()]);
-        existingFileIds.push(fileId);
+        existingFileIds.push(fileId); // メモリ上のリストにも追加
       } catch (e) {
         console.error(`ファイルリストへの追加中にエラー: ${file.getName()}, Error: ${e.toString()}`);
       }
-    } else {
-      console.log(`サポート外のファイル形式のためスキップ: ${file.getName()} (${mimeType})`);
     }
   }
   console.log('ステップ1: 新規ファイルの処理が完了しました。');
 }
 
-
-/****************************************************************
- * ステップ2: OCR処理の実行
- ****************************************************************/
+/**
+ * ファイルリストシート上の「未処理」ファイルを対象にOCR処理を実行します。
+ * @param {Date} startTime - プロセス開始時刻
+ */
 function performOcrOnPendingFiles(startTime) {
   console.log('ステップ2: OCR処理を開始...');
   const fileListSheet = getSheet(CONFIG.FILE_LIST_SHEET);
   const archiveFolder = getFolderByName(CONFIG.ARCHIVE_FOLDER_NAME);
   const data = fileListSheet.getDataRange().getValues();
-
   const learningData = getLearningData();
 
   for (let i = 1; i < data.length; i++) {
-    const currentTime = new Date();
-    const elapsedTime = (currentTime.getTime() - startTime.getTime()) / 1000;
-
+    const elapsedTime = (new Date().getTime() - startTime.getTime()) / 1000;
     if (elapsedTime > CONFIG.EXECUTION_TIME_LIMIT_SECONDS) {
-      console.log(`実行時間が上限(${CONFIG.EXECUTION_TIME_LIMIT_SECONDS}秒)に近づいたため、処理を安全に中断します。`);
+      console.log(`実行時間が上限(${CONFIG.EXECUTION_TIME_LIMIT_SECONDS}秒)に近づいたため、処理を中断します。`);
       break;
     }
 
-    const row = data[i];
-    if (row[2] === STATUS.PENDING) {
-      const fileId = row[0];
-      const fileName = row[1];
+    const rowData = data[i];
+    if (rowData[2] === STATUS.PENDING) {
+      const fileId = rowData[0];
+      const fileName = rowData[1];
       const rowNum = i + 1;
 
       try {
         fileListSheet.getRange(rowNum, 3).setValue(STATUS.PROCESSING);
         SpreadsheetApp.flush();
-        console.log(`OCR処理を開始: ${fileName} (経過時間: ${Math.round(elapsedTime)}秒)`);
+        console.log(`OCR処理を開始: ${fileName}`);
 
         const file = DriveApp.getFileById(fileId);
-        const fileBlob = file.getBlob();
+        const result = callGeminiApi(file.getBlob(), getGeminiPrompt(fileName));
         
-        const prompt = getGeminiPrompt(fileName);
-        const result = callGeminiApi(fileBlob, prompt);
-        
-        Utilities.sleep(1500);
+        Utilities.sleep(1500); // API連続呼び出しのための待機
 
         if (result.success) {
           const ocrData = JSON.parse(result.data);
-          Logger.log(ocrData);
           if (ocrData && ocrData.length > 0) {
-            
-            logOcrResult(ocrData, fileId, learningData);
-
+            logOcrResult(ocrData, file.getId(), learningData);
             logTokenUsage(fileName, result.usage);
-            fileListSheet.getRange(rowNum, 3).setValue(STATUS.PROCESSED);
-            fileListSheet.getRange(rowNum, 5).setValue(new Date());
-            console.log(`OCR処理成功: ${fileName}`);
-            
+            fileListSheet.getRange(rowNum, 3, 1, 2).setValues([[STATUS.PROCESSED, '']]);
             file.moveTo(archiveFolder);
-            console.log(`ファイル ${fileName} をアーカイブしました。`);
-
+            console.log(`OCR処理成功: ${fileName}`);
           } else {
-            console.log(`ファイル ${fileName} から領収書は検出されませんでした。`);
+            console.log(`ファイル ${fileName} から領収書は検出されませんでした。処理待ちに戻します。`);
             fileListSheet.getRange(rowNum, 3).setValue(STATUS.PENDING);
-            console.log(`ファイル ${fileName} はアーカイブされませんでした。処理待ちに戻ります。`);
           }
-
         } else {
           throw new Error(result.error);
         }
-
       } catch (e) {
         const errorMessage = e.message || e.toString();
         console.error(`OCR処理中にエラー: ${fileName}, Error: ${errorMessage}`);
-        fileListSheet.getRange(rowNum, 3).setValue(STATUS.ERROR);
-        fileListSheet.getRange(rowNum, 4).setValue(errorMessage);
+        fileListSheet.getRange(rowNum, 3, 1, 2).setValues([[STATUS.ERROR, errorMessage]]);
+      } finally {
         fileListSheet.getRange(rowNum, 5).setValue(new Date());
       }
     }
@@ -467,9 +519,17 @@ function performOcrOnPendingFiles(startTime) {
   console.log('ステップ2: OCR処理が完了しました。');
 }
 
-/****************************************************************
- * Gemini API 関連
- ****************************************************************/
+
+/**************************************************************************************************
+ * 5. Gemini API 連携 (Gemini API Integration)
+ * * Gemini APIとの通信を担当する関数群です。
+ * APIキーの安全な取得、プロンプトの生成、API呼び出し、勘定科目推測などを行います。
+ **************************************************************************************************/
+
+/**
+ * スクリプトプロパティから安全にAPIキーを取得します。
+ * @returns {string} Gemini APIキー
+ */
 function getApiKey() {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) {
@@ -478,6 +538,12 @@ function getApiKey() {
   return apiKey;
 }
 
+/**
+ * Gemini APIを呼び出し、OCR結果を取得します。
+ * @param {Blob} fileBlob - 処理対象のファイルBlob
+ * @param {string} prompt - APIへの指示プロンプト
+ * @returns {object} APIの実行結果
+ */
 function callGeminiApi(fileBlob, prompt) {
   const apiKey = getApiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
@@ -486,20 +552,13 @@ function callGeminiApi(fileBlob, prompt) {
     "contents": [{
       "parts": [
         { "text": prompt },
-        {
-          "inline_data": {
-            "mime_type": fileBlob.getContentType(),
-            "data": Utilities.base64Encode(fileBlob.getBytes())
-          }
-        }
+        { "inline_data": { "mime_type": fileBlob.getContentType(), "data": Utilities.base64Encode(fileBlob.getBytes()) }}
       ]
     }],
     "generationConfig": {
       "responseMimeType": "application/json",
       "temperature": 0.1,
-      "thinkingConfig": {
-        "thinkingBudget": CONFIG.THINKING_BUDGET
-      }
+      "thinkingConfig": { "thinkingBudget": CONFIG.THINKING_BUDGET }
     }
   };
 
@@ -517,32 +576,23 @@ function callGeminiApi(fileBlob, prompt) {
   if (responseCode === 200) {
     const jsonResponse = JSON.parse(responseBody);
     if (jsonResponse.candidates && jsonResponse.candidates[0].content && jsonResponse.candidates[0].content.parts) {
-      return {
-        success: true,
-        data: jsonResponse.candidates[0].content.parts[0].text,
-        usage: jsonResponse.usageMetadata,
-        error: null
-      };
+      return { success: true, data: jsonResponse.candidates[0].content.parts[0].text, usage: jsonResponse.usageMetadata };
     } else {
-       return {
-        success: false,
-        data: null,
-        usage: jsonResponse.usageMetadata || null,
-        error: "APIからのレスポンスが予期した形式ではありません。"
-      };
+      return { success: false, error: "APIからのレスポンスが予期した形式ではありません。", usage: jsonResponse.usageMetadata || null };
     }
   } else {
-      console.error(`API Error Response [${responseCode}]: ${responseBody}`);
-    return {
-      success: false,
-      data: null,
-      usage: null,
-      error: `API Error ${responseCode}: ${responseBody}`
-    };
+    console.error(`API Error Response [${responseCode}]: ${responseBody}`);
+    return { success: false, error: `API Error ${responseCode}: ${responseBody}` };
   }
 }
 
+/**
+ * Gemini APIに渡すプロンプトを生成します。OCRの精度に直結するため、変更は慎重に行います。
+ * @param {string} filename - ファイル名
+ * @returns {string} 生成されたプロンプト
+ */
 function getGeminiPrompt(filename) {
+  // このプロンプトはOCRの精度を維持するため、変更しません。
   return `
 processing_context:
   processing_date: "${new Date()}"
@@ -602,155 +652,21 @@ special_note_examples:
 `;
 }
 
-
-/****************************************************************
- * ログ記録 & シート操作
- ****************************************************************/
-function logOcrResult(receipts, originalFileId, learningData) {
-  const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
-  const originalFile = DriveApp.getFileById(originalFileId);
-  const originalFileName = originalFile.getName();
-  const fileUrl = originalFile.getUrl();
-
-  const masterData = getMasterData();
-
-  receipts.forEach(r => {
-    const taxCategoryCode = getTaxCategoryCode(r.tax_rate, r.tax_code);
-    const transactionId = Utilities.getUuid();
-
-    let kanjo = null;
-    let hojo = null;
-
-    const learned = learningData[r.storeName];
-    if (learned) {
-      kanjo = learned.kanjo;
-      hojo = learned.hojo;
-      console.log(`学習データを適用: ${r.storeName} -> 勘定科目:${kanjo}, 補助科目:${hojo}`);
-    } else {
-      console.log(`AIによる勘定科目推測を開始: ${r.storeName}`);
-      try {
-        kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
-        console.log(`AI推測結果: ${kanjo}`);
-      } catch(e) {
-        console.error(`勘定科目の推測中にエラー: ${e.toString()}`);
-        kanjo = "【推測エラー】";
-      }
-      hojo = ""; 
-    }
-
-    const fileLink = `=HYPERLINK("${fileUrl}","${r.filename || originalFileName}")`;
-    
-    const newRow = [
-      transactionId,
-      new Date(),
-      r.date,
-      r.storeName,
-      r.description,
-      kanjo,
-      hojo,
-      r.tax_rate,
-      r.amount,
-      r.tax_amount,
-      r.tax_code,
-      taxCategoryCode,
-      fileLink,
-      r.note,
-    ];
-    sheet.appendRow(newRow);
-
-    const lastRow = sheet.getLastRow();
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    const learnCheckColIndex = headers.indexOf('学習チェック') + 1;
-    if(learnCheckColIndex > 0){
-       sheet.getRange(lastRow, learnCheckColIndex).insertCheckboxes();
-    }
-  });
-}
-
-function logTokenUsage(fileName, usage) {
-  const sheet = getSheet(CONFIG.TOKEN_LOG_SHEET);
-  sheet.appendRow([
-    new Date(),
-    fileName,
-    usage.promptTokenCount || 0,
-    usage.thoughtsTokenCount || 0,
-    usage.candidatesTokenCount || 0,
-    usage.totalTokenCount || 0
-  ]);
-}
-
-/****************************************************************
- * 勘定科目推測とAI学習のための関数群
- ****************************************************************/
-
-function getMasterData() {
-  try {
-    const sheet = getSheet(CONFIG.MASTER_SHEET);
-    if (!sheet) {
-      SpreadsheetApp.getUi().alert(`エラー: シート「${CONFIG.MASTER_SHEET}」が見つかりません。シートを作成してください。`);
-      throw new Error(`シート「${CONFIG.MASTER_SHEET}」が見つかりません。`);
-    }
-    if (sheet.getLastRow() < 2) return [];
-    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
-    return data.filter(row => row[0]);
-  } catch (e) {
-    console.error(e);
-    return [];
-  }
-}
-
-function getLearningData() {
-  const learningData = {};
-  try {
-    const sheet = getSheet(CONFIG.LEARNING_SHEET);
-    if (sheet && sheet.getLastRow() > 1) {
-      const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
-      for (let i = data.length - 1; i >= 0; i--) {
-        const row = data[i];
-        const storeName = row[1];
-        if (storeName && !learningData[storeName]) {
-          learningData[storeName] = {
-            description: row[2],
-            kanjo: row[3],
-            hojo: row[4]
-          };
-        }
-      }
-    }
-  } catch(e){
-      console.error("学習データの取得に失敗: " + e.toString());
-  }
-  return learningData;
-}
-
-
+/**
+ * Geminiに勘定科目を推測させます。
+ * @param {string} storeName - 店名
+ * @param {string} description - 摘要
+ * @param {number} amount - 金額
+ * @param {Array} masterData - 勘定科目マスターデータ
+ * @returns {string} 推測された勘定科目
+ */
 function inferAccountTitle(storeName, description, amount, masterData) {
-  if (!masterData || masterData.length === 0) {
-    return "【マスター未設定】";
-  }
+  if (!masterData || masterData.length === 0) return "【マスター未設定】";
 
-  const masterListWithKeywords = masterData.map(row => {
-    return { title: row[0], keywords: row[1] || "特になし" };
-  });
+  const masterListWithKeywords = masterData.map(row => ({ title: row[0], keywords: row[1] || "特になし" }));
   const masterTitleList = masterData.map(row => row[0]);
 
-  const prompt = `
-あなたは、日本の会計基準に精通したベテランの経理専門家です。あなたの任務は、与えられた領収書の情報と、社内ルールを含む勘定科目マスターを基に、最も可能性の高い勘定科目を特定することです。
-
-# 指示
-1.  以下の「領収書情報」と「勘定科目マスター」を注意深く分析してください。
-2.  特に「勘定科目マスター」の**キーワード/ルール**は重要です。例えば、「2万円未満の飲食代は会議費」といった金額に基づくルールが含まれている場合があります。
-3.  すべての情報を総合的に判断し、「勘定科目マスター」のリストの中から最も適切だと考えられる勘定科目を**1つだけ**選択してください。
-4.  あなたの回答は、必ず指定されたJSON形式に従ってください。
-
-# 領収書情報
-- 店名: ${storeName}
-- 摘要: ${description}
-- 金額(税込): ${amount}円
-
-# 勘定科目マスター（キーワード/ルールを含む）
-${JSON.stringify(masterListWithKeywords)}
-`;
+  const prompt = `あなたは、日本の会計基準に精通したベテランの経理専門家です。あなたの任務は、与えられた領収書の情報と、社内ルールを含む勘定科目マスターを基に、最も可能性の高い勘定科目を特定することです。# 指示\n1. 以下の「領収書情報」と「勘定科目マスター」を注意深く分析してください。\n2. 特に「勘定科目マスター」の**キーワード/ルール**は重要です。例えば、「2万円未満の飲食代は会議費」といった金額に基づくルールが含まれている場合があります。\n3. すべての情報を総合的に判断し、「勘定科目マスター」のリストの中から最も適切だと考えられる勘定科目を**1つだけ**選択してください。\n4. あなたの回答は、必ず指定されたJSON形式に従ってください。# 領収書情報\n- 店名: ${storeName}\n- 摘要: ${description}\n- 金額(税込): ${amount}円\n# 勘定科目マスター（キーワード/ルールを含む）\n${JSON.stringify(masterListWithKeywords)}`;
 
   const apiKey = getApiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
@@ -762,258 +678,340 @@ ${JSON.stringify(masterListWithKeywords)}
       "temperature": 0,
       "responseSchema": {
         "type": "OBJECT",
-        "properties": {
-          "accountTitle": {
-            "type": "STRING",
-            "enum": masterTitleList
-          }
-        },
+        "properties": { "accountTitle": { "type": "STRING", "enum": masterTitleList }},
         "required": ["accountTitle"]
       }
     }
   };
 
-  const options = {
-    'method': 'post',
-    'contentType': 'application/json',
-    'payload': JSON.stringify(payload),
-    'muteHttpExceptions': true
-  };
-
+  const options = { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true };
   const response = UrlFetchApp.fetch(url, options);
-  const responseCode = response.getResponseCode();
-  const responseBody = response.getContentText();
 
-  if (responseCode === 200) {
+  if (response.getResponseCode() === 200) {
     try {
-      const jsonResponse = JSON.parse(responseBody);
-      const inferredText = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.text;
+      const inferredText = JSON.parse(response.getContentText()).candidates?.[0]?.content?.parts?.[0]?.text;
       if (inferredText) {
         const finalAnswer = JSON.parse(inferredText);
         if (finalAnswer.accountTitle && masterTitleList.includes(finalAnswer.accountTitle)) {
            return finalAnswer.accountTitle;
         }
       }
-      console.error("AIからのJSONレスポンスの形式が不正です。", responseBody);
+      console.error("AIからのJSONレスポンスの形式が不正です。", response.getContentText());
       return "【形式エラー】";
     } catch (e) {
-      console.error("AIからのJSONレスポンスの解析に失敗しました。", e.toString(), responseBody);
+      console.error("AIからのJSONレスポンスの解析に失敗しました。", e.toString(), response.getContentText());
       return "【解析エラー】";
     }
   } else {
-    console.error(`勘定科目推測APIエラー [${responseCode}]: ${responseBody}`);
-    return `【APIエラー ${responseCode}】`;
+    console.error(`勘定科目推測APIエラー [${response.getResponseCode()}]: ${response.getContentText()}`);
+    return `【APIエラー ${response.getResponseCode()}】`;
   }
 }
 
-/****************************************************************
- * ユーティリティ & 初期化
- ****************************************************************/
+
+/**************************************************************************************************
+ * 6. ヘルパー関数 (Helper Functions)
+ * * スクリプト内の様々な場所から呼び出される補助的な関数群です。
+ * シート操作、Drive操作、データ整形、イベントハンドラの子処理などが含まれます。
+ **************************************************************************************************/
+
+// --- イベントハンドラ サブ関数 ---
 
 /**
- * ★★★【修正箇所】★★★
- * プレビュー表示のメイン関数。HTMLにファイルIDを渡してダイアログを開く。
+ * onEditから呼び出され、学習チェックボックスの変更を処理します。
+ * @param {Sheet} sheet - 対象シート
+ * @param {number} row - 変更があった行
+ * @param {Array<string>} headers - ヘッダー行の配列
  */
-function showReceiptPreview() {
-  const ui = SpreadsheetApp.getUi();
-  try {
-    const sheet = SpreadsheetApp.getActiveSheet();
-    if (sheet.getName() !== CONFIG.OCR_RESULT_SHEET) {
-      ui.alert('この機能は「OCR結果」シートで実行してください。');
-      return;
-    }
+function handleLearningCheck(sheet, row, col, headers) {
+  const range = sheet.getRange(row, col);
+  const transactionId = sheet.getRange(row, headers.indexOf('取引ID') + 1).getValue();
+  if (!transactionId) return; 
 
-    const range = sheet.getActiveRange();
-    const startRow = range.getRow();
-    if (startRow <= 1) {
-      ui.alert('データ行を選択してください。');
-      return;
-    }
-
-    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    const linkColIndex = headers.indexOf('ファイルへのリンク') + 1;
-    if (linkColIndex === 0) {
-      ui.alert('「ファイルへのリンク」列が見つかりません。');
-      return;
-    }
-
-    const cellFormula = sheet.getRange(startRow, linkColIndex).getFormula();
-    if (!cellFormula) {
-      ui.alert('選択した行にファイルへのリンクがありません。');
-      return;
-    }
+  if (range.isChecked()) { // 学習登録
+    if (range.getNote().includes('学習済み')) return;
     
-    const urlMatch = cellFormula.match(/HYPERLINK\("([^"]+)"/);
-    if (!urlMatch || !urlMatch[1]) {
-      ui.alert('リンクの形式が正しくありません。');
-      return;
+    const dataRow = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const storeName = dataRow[headers.indexOf('店名')];
+    const description = dataRow[headers.indexOf('摘要')];
+    const kanjo = dataRow[headers.indexOf('勘定科目')];
+    const hojo = dataRow[headers.indexOf('補助科目')];
+
+    getSheet(CONFIG.LEARNING_SHEET).appendRow([new Date(), storeName, description, kanjo, hojo, transactionId]);
+    
+    range.setNote(`学習済み (ID: ${transactionId})`);
+    sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground('#e6f4ea');
+    SpreadsheetApp.getActiveSpreadsheet().toast(`「${storeName}」の勘定科目を学習しました。`);
+  } else { // 学習取消
+    const deletedCount = deleteLearningDataByIds([transactionId]);
+    if (deletedCount > 0) {
+      range.clearNote();
+      sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground(null);
+      SpreadsheetApp.getActiveSpreadsheet().toast(`取引ID ${transactionId} の学習データを取り消しました。`);
     }
+  }
+}
 
-    const fileUrl = urlMatch[1];
-    let fileId = null;
+/**
+ * onEditから呼び出され、登録番号が削除された際の税区分更新を処理します。
+ * @param {Sheet} sheet - 対象シート
+ * @param {number} row - 変更があった行
+ * @param {Array<string>} headers - ヘッダー行の配列
+ */
+function handleTaxCodeRemoval(sheet, row, headers) {
+  const taxRateCol = headers.indexOf('税率(%)') + 1;
+  const taxCategoryCol = headers.indexOf('消費税課税区分コード') + 1;
 
-    const idMatch1 = fileUrl.match(/d\/([a-zA-Z0-9_-]{28,})/);
-    if (idMatch1 && idMatch1[1]) {
-      fileId = idMatch1[1];
+  if (taxRateCol > 0 && taxCategoryCol > 0) {
+    const taxRate = sheet.getRange(row, taxRateCol).getValue();
+    const newTaxCategory = getTaxCategoryCode(taxRate, ""); // taxCodeは空
+    sheet.getRange(row, taxCategoryCol).setValue(newTaxCategory);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`行 ${row} の登録番号が削除されたため、税区分を更新しました。`);
+  }
+}
+
+// --- データ記録 & 整形 ---
+
+/**
+ * OCR結果をスプレッドシートに記録します。
+ * @param {Array<Object>} receipts - OCR結果の配列
+ * @param {string} originalFileId - 元ファイルのID
+ * @param {Object} learningData - 学習データオブジェクト
+ */
+function logOcrResult(receipts, originalFileId, learningData) {
+  const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
+  const originalFile = DriveApp.getFileById(originalFileId);
+  const masterData = getMasterData();
+
+  const newRows = receipts.map(r => {
+    let kanjo = null, hojo = null;
+    const learned = learningData[r.storeName];
+
+    if (learned) {
+      kanjo = learned.kanjo;
+      hojo = learned.hojo;
     } else {
-      const idMatch2 = fileUrl.match(/id=([a-zA-Z0-9_-]{28,})/);
-      if (idMatch2 && idMatch2[1]) {
-        fileId = idMatch2[1];
+      try {
+        kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
+      } catch(e) {
+        console.error(`勘定科目の推測中にエラー: ${e.toString()}`);
+        kanjo = "【推測エラー】";
       }
+      hojo = ""; 
     }
     
-    if (!fileId) {
-      ui.alert('ファイルURLからIDを抽出できませんでした。URL: ' + fileUrl);
-      return;
-    }
+    return [
+      Utilities.getUuid(), new Date(), r.date, r.storeName, r.description,
+      kanjo, hojo, r.tax_rate, r.amount, r.tax_amount, r.tax_code,
+      getTaxCategoryCode(r.tax_rate, r.tax_code),
+      `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`,
+      r.note
+    ];
+  });
+
+  if (newRows.length > 0) {
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, newRows.length, newRows[0].length).setValues(newRows);
     
-    // HTMLテンプレートにファイルIDを渡す
-    const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
-    htmlTemplate.fileId = fileId;
-
-    const htmlOutput = htmlTemplate.evaluate()
-        .setWidth(700)
-        .setHeight(800);
-    ui.showModalDialog(htmlOutput, `領収書プレビュー`);
-
-  } catch (e) {
-    console.error('プレビュー表示中にエラーが発生しました: ' + e.toString());
-    ui.alert('エラー', 'プレビューの表示中にエラーが発生しました。\n\n詳細: ' + e.message, ui.ButtonSet.OK);
+    const headers = CONFIG.HEADERS.OCR_RESULT;
+    const learnCheckCol = headers.indexOf('学習チェック') + 1;
+    if (learnCheckCol > 0) {
+      sheet.getRange(startRow, learnCheckCol, newRows.length).insertCheckboxes();
+    }
   }
 }
 
 /**
- * ★★★【新規追加】★★★
- * HTML側から呼び出される関数。ファイルIDを受け取り、画像データを返す。
+ * APIのトークン使用量を記録します。
+ * @param {string} fileName - ファイル名
+ * @param {object} usage - トークン使用量情報
  */
-function getImageDataForPreview(fileId) {
-  try {
-    const file = DriveApp.getFileById(fileId);
-    const originalBlob = file.getBlob();
-    let imageBlob;
-
-    if (originalBlob.getContentType() === MimeType.PDF) {
-      imageBlob = originalBlob.getAs('image/png');
-    } else {
-      imageBlob = originalBlob;
-    }
-
-    const dataUrl = `data:${imageBlob.getContentType()};base64,${Utilities.base64Encode(imageBlob.getBytes())}`;
-    const fileName = file.getName();
-    
-    return { 
-      success: true, 
-      fileName: fileName,
-      dataUrl: dataUrl 
-    };
-  } catch (e) {
-    console.error('画像データの取得中にエラー: ' + e.toString());
-    return { success: false, error: e.message };
-  }
+function logTokenUsage(fileName, usage) {
+  const sheet = getSheet(CONFIG.TOKEN_LOG_SHEET);
+  sheet.appendRow([
+    new Date(), fileName,
+    usage.promptTokenCount || 0, usage.thoughtsTokenCount || 0,
+    usage.candidatesTokenCount || 0, usage.totalTokenCount || 0
+  ]);
 }
 
+/**
+ * 学習データシートから指定されたIDのデータを削除します。
+ * @param {Array<string>} transactionIds - 削除対象の取引ID配列
+ * @returns {number} 削除された行数
+ */
+function deleteLearningDataByIds(transactionIds) {
+  const learningSheet = getSheet(CONFIG.LEARNING_SHEET);
+  if (!learningSheet || learningSheet.getLastRow() < 2) return 0;
 
+  const data = learningSheet.getRange(2, 1, learningSheet.getLastRow() - 1, CONFIG.HEADERS.LEARNING.length).getValues();
+  const idCol = CONFIG.HEADERS.LEARNING.indexOf('取引ID');
+  let deletedCount = 0;
+
+  // 下からループすることで、行削除によるインデックスのズレを防ぐ
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (transactionIds.includes(data[i][idCol])) {
+      learningSheet.deleteRow(i + 2);
+      deletedCount++;
+    }
+  }
+  return deletedCount;
+}
+
+/**
+ * 税率と登録番号の有無から、弥生会計用の税区分コードを返します。
+ * @param {number} taxRate - 税率(%)
+ * @param {string} taxCode - 登録番号
+ * @returns {string} 消費税課税区分コード
+ */
 function getTaxCategoryCode(taxRate, taxCode) {
   const hasInvoiceNumber = taxCode && taxCode.match(/^T\d{13}$/);
-
-  if (taxRate === 10) {
-    return hasInvoiceNumber ? '課対仕入内10%適格' : '課対仕入内10%区分80%';
-  } else if (taxRate === 8) {
-    return hasInvoiceNumber ? '課対仕入内軽減8%適格' : '課対仕入内軽減8%区分80%';
-  } else {
-    return '対象外';
-  }
+  if (taxRate === 10) return hasInvoiceNumber ? '課対仕入内10%適格' : '課対仕入内10%区分80%';
+  if (taxRate === 8) return hasInvoiceNumber ? '課対仕入内軽減8%適格' : '課対仕入内軽減8%区分80%';
+  return '対象外';
 }
 
-function initializeEnvironment() {
-  console.log('環境の初期化を確認・実行します...');
-  getFolderByName(CONFIG.ARCHIVE_FOLDER_NAME, true);
+// --- データ取得 ---
 
-  const fileListHeaders = ['ファイルID', 'ファイル名', 'ステータス', 'エラー詳細', '登録日時'];
-  
-  const ocrResultHeaders = [
-    '取引ID', '処理日時', '取引日', '店名', '摘要', '勘定科目', '補助科目', 
-    '税率(%)', '金額(税込)', 'うち消費税', '登録番号', 
-    '消費税課税区分コード', 'ファイルへのリンク', '備考', '学習チェック'
-  ];
-  const tokenLogHeaders = ['日時', 'ファイル名', '入力トークン', '思考トークン', '出力トークン', '合計トークン'];
-  
-  const learningHeaders = ['学習登録日時', '店名', '摘要', '勘定科目', '補助科目', '取引ID'];
-
-  createSheetWithHeaders(CONFIG.FILE_LIST_SHEET, fileListHeaders);
-  createSheetWithHeaders(CONFIG.OCR_RESULT_SHEET, ocrResultHeaders, true);
-  createSheetWithHeaders(CONFIG.TOKEN_LOG_SHEET, tokenLogHeaders);
-  createSheetWithHeaders(CONFIG.LEARNING_SHEET, learningHeaders);
-
-  console.log('環境の初期化が完了しました。');
-}
-
-function activateFilter() {
-  const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
-  if (sheet) {
-    if (sheet.getFilter()) {
-      sheet.getFilter().remove();
-    }
-    sheet.getDataRange().createFilter();
-    SpreadsheetApp.getUi().alert('フィルタをオンにしました。');
-  }
-}
-
-function getSpreadsheet() {
+/**
+ * 勘定科目マスターシートからデータを取得します。
+ * @returns {Array<Array<string>>} マスターデータ
+ */
+function getMasterData() {
   try {
-    return SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = getSheet(CONFIG.MASTER_SHEET);
+    if (!sheet || sheet.getLastRow() < 2) return [];
+    return sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().filter(row => row[0]);
   } catch (e) {
-    SpreadsheetApp.getUi().alert("スクリプトエラー", "スプレッドシートにアクセスできません。");
-    console.error("スプレッドシートにアクセスできませんでした: " + e.toString());
-    throw e;
+    console.error(e);
+    showError(`シート「${CONFIG.MASTER_SHEET}」からデータを取得できませんでした。`);
+    return [];
   }
 }
 
-function getSheet(name) {
-  return getSpreadsheet().getSheetByName(name);
+/**
+ * 学習データシートからデータを取得し、{店名: {勘定, 補助}} の形式で返します。
+ * @returns {Object} 学習データオブジェクト
+ */
+function getLearningData() {
+  const learningData = {};
+  try {
+    const sheet = getSheet(CONFIG.LEARNING_SHEET);
+    if (sheet && sheet.getLastRow() > 1) {
+      const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
+      for (let i = data.length - 1; i >= 0; i--) {
+        const row = data[i];
+        const storeName = row[1];
+        if (storeName && !learningData[storeName]) {
+          learningData[storeName] = { kanjo: row[3], hojo: row[4] };
+        }
+      }
+    }
+  } catch(e) {
+    console.error("学習データの取得に失敗: " + e.toString());
+  }
+  return learningData;
 }
 
+/**
+ * 指定された行のセルからGoogle DriveのファイルIDを抽出します。
+ * @param {Sheet} sheet - 対象シート
+ * @param {number} row - 対象行
+ * @returns {string|null} ファイルID or null
+ */
+function getFileIdFromCell(sheet, row) {
+  const headers = CONFIG.HEADERS.OCR_RESULT;
+  const linkCol = headers.indexOf('ファイルへのリンク') + 1;
+  if (linkCol === 0) {
+    showError('「ファイルへのリンク」列が見つかりません。');
+    return null;
+  }
+  
+  const cellFormula = sheet.getRange(row, linkCol).getFormula();
+  if (!cellFormula) {
+    showError('選択した行にファイルへのリンクがありません。');
+    return null;
+  }
+  
+  const urlMatch = cellFormula.match(/HYPERLINK\("([^"]+)"/);
+  if (!urlMatch || !urlMatch[1]) {
+    showError('リンクの形式が正しくありません。');
+    return null;
+  }
+
+  const fileUrl = urlMatch[1];
+  const idMatch = fileUrl.match(/d\/([a-zA-Z0-9_-]{28,})/) || fileUrl.match(/id=([a-zA-Z0-9_-]{28,})/);
+  
+  if (!idMatch || !idMatch[1]) {
+    showError('ファイルURLからIDを抽出できませんでした。URL: ' + fileUrl);
+    return null;
+  }
+  return idMatch[1];
+}
+
+// --- シート・フォルダ操作 ---
+
+/**
+ * 名前でシートを取得します。
+ * @param {string} name - シート名
+ * @returns {Sheet} スプレッドシートのシートオブジェクト
+ */
+function getSheet(name) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+}
+
+/**
+ * 名前でフォルダを取得または作成します。
+ * @param {string} name - フォルダ名
+ * @param {boolean} createIfNotExist - 存在しない場合に作成するかどうか
+ * @returns {Folder} Driveのフォルダオブジェクト
+ */
 function getFolderByName(name, createIfNotExist = false) {
   const sourceFolder = DriveApp.getFolderById(CONFIG.SOURCE_FOLDER_ID);
-  const parents = sourceFolder.getParents();
+  const parentFolder = sourceFolder.getParents().hasNext() ? sourceFolder.getParents().next() : DriveApp.getRootFolder();
+  const folders = parentFolder.getFoldersByName(name);
 
-  if (parents.hasNext()) {
-    const parentFolder = parents.next();
-    const folders = parentFolder.getFoldersByName(name);
-    if (folders.hasNext()) {
-      return folders.next();
-    }
-    if (createIfNotExist) {
-      console.log(`フォルダ「${name}」を「${parentFolder.getName()}」内に作成します。`);
-      return parentFolder.createFolder(name);
-    }
-  } else {
-    const rootFolders = DriveApp.getFoldersByName(name);
-     if (rootFolders.hasNext()) {
-       return rootFolders.next();
-     }
-     if (createIfNotExist) {
-       console.log(`フォルダ「${name}」をマイドライブ直下に作成します。`);
-       return DriveApp.createFolder(name);
-     }
+  if (folders.hasNext()) {
+    return folders.next();
   }
-  
+  if (createIfNotExist) {
+    console.log(`フォルダ「${name}」を「${parentFolder.getName()}」内に作成します。`);
+    return parentFolder.createFolder(name);
+  }
   return null;
 }
 
+/**
+ * 指定された名前のシートが存在しない場合に、ヘッダー付きで作成します。
+ * @param {string} sheetName - シート名
+ * @param {Array<string>} headers - ヘッダー行の配列
+ * @param {boolean} activateFilterFlag - フィルタを有効にするかどうか
+ */
 function createSheetWithHeaders(sheetName, headers, activateFilterFlag = false) {
-  const ss = getSpreadsheet();
-  const sheet = ss.getSheetByName(sheetName);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
 
   if (!sheet) {
     console.log(`シート "${sheetName}" を作成します。`);
-    const newSheet = ss.insertSheet(sheetName);
-    newSheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-    newSheet.setFrozenRows(1);
-    if(activateFilterFlag && newSheet.getLastRow() > 0) {
-      newSheet.getDataRange().createFilter();
-    }
-  } else {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    sheet = ss.insertSheet(sheetName);
   }
+  
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  
+  if (activateFilterFlag && sheet.getFilter()) {
+    sheet.getFilter().remove();
+  }
+  if (activateFilterFlag && sheet.getLastRow() > 0) {
+    sheet.getDataRange().createFilter();
+  }
+}
+
+/**
+ * ユーザーにエラーメッセージをダイアログで表示します。
+ * @param {string} message - 表示するメッセージ
+ * @param {string} [title='エラー'] - ダイアログのタイトル
+ */
+function showError(message, title = 'エラー') {
+  SpreadsheetApp.getUi().alert(title, message, SpreadsheetApp.getUi().ButtonSet.OK);
 }
