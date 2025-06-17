@@ -1,12 +1,10 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v2.1.2 Final Fix)
+ * * 領収書OCRシステム (v2.3.0 Flexible Learning)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
  * AIによる勘定科目推測、ユーザー学習機能、弥生会計用CSVエクスポート機能などを提供します。
- * * このバージョンについて (v2.1.2):
- * - 修正: メニューから呼び出される関数名を修正し、「関数が見つかりません」エラーを解消。
- * - 修正: APIモデル名をユーザーの元の設定に修正し、404エラーを解消。
- * - 機能: エクスポート済み取引を別シートに移動・復元する機能。
+ * * このバージョンについて (v2.3.0):
+ * - 改善: 学習機能を強化。店名の一致判定を「正規化＋部分一致」の複合ルールに変更。
  * **************************************************************************************************/
 
 
@@ -46,8 +44,8 @@ const CONFIG = {
     TORIHIKI_TYPE: '0',
     CHOUSEI: 'no',
     CSV_COLUMNS: [
-      '識別フラグ', '伝票NO', '決算整理仕訳', '取引日付', '借方勘定科目', '借方補助科目', '借方部門', 
-      '借方税区分', '借方金額', '借方税金額', '貸方勘定科目', '貸方補助科目', '貸方部門', 
+      '識別フラグ', '伝票NO', '決算整理仕訳', '取引日付', '借方勘定科目', '借方補助科目', '借方部門',
+      '借方税区分', '借方金額', '借方税金額', '貸方勘定科目', '貸方補助科目', '貸方部門',
       '貸方税区分', '貸方金額', '貸方税金額', '摘要', '手形番号', '手形期日', '取引タイプ',
       '生成元', '仕訳メモ', '付箋1', '付箋2', '調整'
     ],
@@ -57,13 +55,13 @@ const CONFIG = {
   HEADERS: {
     FILE_LIST: ['ファイルID', 'ファイル名', 'ステータス', 'エラー詳細', '登録日時'],
     OCR_RESULT: [
-      '取引ID', '処理日時', '取引日', '店名', '摘要', '勘定科目', '補助科目', 
-      '税率(%)', '金額(税込)', 'うち消費税', '登録番号', 
+      '取引ID', '処理日時', '取引日', '店名', '摘要', '勘定科目', '補助科目',
+      '税率(%)', '金額(税込)', 'うち消費税', '登録番号',
       '消費税課税区分コード', 'ファイルへのリンク', '備考', '学習チェック'
     ],
     EXPORTED: [
-      '取引ID', '処理日時', '取引日', '店名', '摘要', '勘定科目', '補助科目', 
-      '税率(%)', '金額(税込)', 'うち消費税', '登録番号', 
+      '取引ID', '処理日時', '取引日', '店名', '摘要', '勘定科目', '補助科目',
+      '税率(%)', '金額(税込)', 'うち消費税', '登録番号',
       '消費税課税区分コード', 'ファイルへのリンク', '備考', '学習チェック',
       '出力日'
     ],
@@ -92,9 +90,8 @@ function onOpen() {
     .addItem('選択行の領収書をプレビュー', 'showReceiptPreview')
     .addSeparator()
     .addItem('弥生会計形式でエクスポート', 'exportForYayoi')
-    // ★★★ 修正点 ★★★ 呼び出す関数名を 'moveTransactionsBackToOcr' に変更
     .addItem('選択した取引をOCR結果に戻す', 'moveTransactionsBackToOcr')
-    .addSeparator() 
+    .addSeparator()
     .addItem('フィルタをオンにする', 'activateFilter')
     .addItem('選択した行にダミー番号を挿入', 'insertDummyInvoiceNumber')
     .addItem('選択した取引を削除', 'deleteSelectedTransactions')
@@ -107,7 +104,7 @@ function onEdit(e) {
     const sheet = range.getSheet();
     const row = range.getRow();
     const col = range.getColumn();
-    
+
     if (sheet.getName() !== CONFIG.OCR_RESULT_SHEET || row <= 1) {
       return;
     }
@@ -154,7 +151,7 @@ function initializeEnvironment() {
 /**************************************************************************************************
  * 3. ユーザーインターフェース (UI) - メニュー機能
  **************************************************************************************************/
-
+// ... このセクションの関数に変更はありません ...
 function exportForYayoi() {
     const ui = SpreadsheetApp.getUi();
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
@@ -177,9 +174,9 @@ function exportForYayoi() {
     );
 
     if (response !== ui.Button.OK) return;
-    
+
     const fullWidthRange = sheet.getRange(range.getRow(), 1, range.getNumRows(), sheet.getLastColumn());
-    const selectedData = fullWidthRange.getValues(); 
+    const selectedData = fullWidthRange.getValues();
     const formulas = fullWidthRange.getFormulas();
 
     const headers = CONFIG.HEADERS.OCR_RESULT;
@@ -196,7 +193,7 @@ function exportForYayoi() {
     };
 
     const csvData = selectedData.map(row => {
-        const csvRow = new Array(CONFIG.YAYOI.CSV_COLUMNS.length).fill(''); 
+        const csvRow = new Array(CONFIG.YAYOI.CSV_COLUMNS.length).fill('');
         csvRow[0]  = CONFIG.YAYOI.SHIKIBETSU_FLAG;
         csvRow[3]  = Utilities.formatDate(new Date(row[COL.TRANSACTION_DATE]), 'JST', 'yyyy/MM/dd');
         csvRow[4]  = row[COL.ACCOUNT_TITLE];
@@ -219,12 +216,12 @@ function exportForYayoi() {
         const fileName = `import_${Utilities.formatDate(new Date(), 'JST', 'yyyyMMdd_HHmmss')}.csv`;
         const csvString = csvData.map(row => row.join(',')).join('\n');
         const blob = Utilities.newBlob('', MimeType.CSV, fileName).setDataFromString(csvString, 'Shift_JIS');
-        
+
         exportFolder.createFile(blob);
-        
+
         const exportedSheet = getSheet(CONFIG.EXPORTED_SHEET);
         const exportDate = new Date();
-        
+
         const rowsToMove = selectedData.map((row, index) => {
             const newRow = [...row, exportDate];
             newRow[COL.FILE_LINK] = formulas[index][COL.FILE_LINK] || row[COL.FILE_LINK];
@@ -245,10 +242,6 @@ function exportForYayoi() {
     }
 }
 
-/**
- * ★★★ 修正点 ★★★ 関数名を 'moveTransactionsBackToOcr' に変更
- * 選択された出力済み取引を「OCR結果」シートに戻します。
- */
 function moveTransactionsBackToOcr() {
   const ui = SpreadsheetApp.getUi();
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.EXPORTED_SHEET);
@@ -263,7 +256,7 @@ function moveTransactionsBackToOcr() {
     showError('ヘッダー行は戻せません。データ行を選択してください。');
     return;
   }
-  
+
   const response = ui.alert(
     '取引の差し戻し',
     `選択中の ${range.getNumRows()} 件の取引を「${CONFIG.OCR_RESULT_SHEET}」シートに戻しますか？`,
@@ -324,10 +317,10 @@ function showReceiptPreview() {
       showError('データ行を選択してください。');
       return;
     }
-    
+
     const fileId = getFileIdFromCell(sheet, startRow);
     if (!fileId) return;
-    
+
     const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
     htmlTemplate.fileId = fileId;
 
@@ -349,15 +342,15 @@ function deleteSelectedTransactions() {
     showError(`この機能は「${CONFIG.OCR_RESULT_SHEET}」または「${CONFIG.EXPORTED_SHEET}」シートでのみ使用できます。`);
     return;
   }
-  
+
   const range = sheet.getActiveRange();
   const startRow = range.getRow();
-  
+
   if (startRow <= 1) {
     showError('ヘッダー行は削除できません。データ行を選択してください。');
     return;
   }
-  
+
   const response = ui.alert(
     '選択した取引の完全削除',
     `選択中の ${range.getNumRows()} 件の取引を完全に削除しますか？\n\n学習済みの取引が含まれている場合、関連する学習データも完全に削除されます。この操作は元に戻せません。`,
@@ -373,26 +366,26 @@ function deleteSelectedTransactions() {
   const selectedRows = fullRange.getValues();
 
   const transactionIdsToDelete = selectedRows.map(row => row[transactionIdColIndex]).filter(id => id);
-  
+
   let learnedDeletedCount = 0;
   if (transactionIdsToDelete.length > 0) {
     learnedDeletedCount = deleteLearningDataByIds(transactionIdsToDelete);
   }
 
   sheet.deleteRows(startRow, range.getNumRows());
-  
+
   ui.alert('処理完了', `${range.getNumRows()}件の取引を完全に削除しました。\n(うち、${learnedDeletedCount}件の学習データも関連して削除されました。)`, ui.ButtonSet.OK);
 }
 
 function insertDummyInvoiceNumber() {
   const sheet = SpreadsheetApp.getActiveSheet();
   const sheetName = sheet.getName();
-  
+
   if (sheetName !== CONFIG.OCR_RESULT_SHEET) {
     showError(`この機能は「${CONFIG.OCR_RESULT_SHEET}」シートでのみ使用できます。`);
     return;
   }
-  
+
   const range = sheet.getActiveRange();
   if (range.getRow() <= 1) {
     showError('ヘッダー行には適用できません。データ行を選択してください。');
@@ -414,11 +407,11 @@ function insertDummyInvoiceNumber() {
   let updatedCount = 0;
 
   values.forEach((row, i) => {
-    if (!row[taxCodeCol - 1]) {
+    if (!row[taxCodeCol - 1]) { // 登録番号が空の場合
       const dummyNumber = 'T' + Math.random().toString().slice(2, 15);
       row[taxCodeCol - 1] = dummyNumber;
       row[taxCategoryCol - 1] = getTaxCategoryCode(row[taxRateCol - 1], dummyNumber);
-      
+
       const taxCodeCell = sheet.getRange(range.getRow() + i, taxCodeCol);
       taxCodeCell.setValue(dummyNumber).setFontColor("#0000FF");
       sheet.getRange(range.getRow() + i, taxCategoryCol).setValue(row[taxCategoryCol - 1]);
@@ -448,16 +441,16 @@ function getImageDataForPreview(fileId) {
   try {
     const file = DriveApp.getFileById(fileId);
     const originalBlob = file.getBlob();
-    const imageBlob = (originalBlob.getContentType() === MimeType.PDF) 
-      ? originalBlob.getAs('image/png') 
+    const imageBlob = (originalBlob.getContentType() === MimeType.PDF)
+      ? originalBlob.getAs('image/png')
       : originalBlob;
 
     const dataUrl = `data:${imageBlob.getContentType()};base64,${Utilities.base64Encode(imageBlob.getBytes())}`;
-    
-    return { 
-      success: true, 
+
+    return {
+      success: true,
       fileName: file.getName(),
-      dataUrl: dataUrl 
+      dataUrl: dataUrl
     };
   } catch (e) {
     console.error('画像データの取得中にエラー: ' + e.toString());
@@ -469,7 +462,7 @@ function getImageDataForPreview(fileId) {
 /**************************************************************************************************
  * 4. バックグラウンド処理 (Background Processing)
  **************************************************************************************************/
-
+// ... このセクションの関数に変更はありません ...
 function processNewFiles() {
   console.log('ステップ1: 新規ファイルの処理を開始...');
   const sourceFolder = DriveApp.getFolderById(CONFIG.SOURCE_FOLDER_ID);
@@ -483,7 +476,7 @@ function processNewFiles() {
     const fileId = file.getId();
 
     if (existingFileIds.includes(fileId)) continue;
-    
+
     const mimeType = file.getMimeType();
     if (mimeType === MimeType.PDF || mimeType.startsWith('image/')) {
       try {
@@ -525,7 +518,7 @@ function performOcrOnPendingFiles(startTime) {
 
         const file = DriveApp.getFileById(fileId);
         const result = callGeminiApi(file.getBlob(), getGeminiPrompt(fileName));
-        
+
         Utilities.sleep(1500);
 
         if (result.success) {
@@ -559,7 +552,7 @@ function performOcrOnPendingFiles(startTime) {
 /**************************************************************************************************
  * 5. Gemini API 連携 (Gemini API Integration)
  **************************************************************************************************/
-
+// ... このセクションの関数に変更はありません ...
 function getApiKey() {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) {
@@ -571,7 +564,7 @@ function getApiKey() {
 function callGeminiApi(fileBlob, prompt) {
   const apiKey = getApiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  
+
   const payload = {
     "contents": [{
       "parts": [
@@ -680,7 +673,7 @@ function inferAccountTitle(storeName, description, amount, masterData) {
 
   const apiKey = getApiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  
+
   const payload = {
     "contents": [{"parts": [{ "text": prompt }]}],
     "generationConfig": {
@@ -723,14 +716,16 @@ function inferAccountTitle(storeName, description, amount, masterData) {
  * 6. ヘルパー関数 (Helper Functions)
  **************************************************************************************************/
 
+// --- イベントハンドラ サブ関数 ---
+// ... このセクションの handle~ 関数に変更はありません ...
 function handleLearningCheck(sheet, row, col, headers) {
   const range = sheet.getRange(row, col);
   const transactionId = sheet.getRange(row, headers.indexOf('取引ID') + 1).getValue();
-  if (!transactionId) return; 
+  if (!transactionId) return;
 
   if (range.isChecked()) {
     if (range.getNote().includes('学習済み')) return;
-    
+
     const dataRow = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
     const storeName = dataRow[headers.indexOf('店名')];
     const description = dataRow[headers.indexOf('摘要')];
@@ -738,7 +733,7 @@ function handleLearningCheck(sheet, row, col, headers) {
     const hojo = dataRow[headers.indexOf('補助科目')];
 
     getSheet(CONFIG.LEARNING_SHEET).appendRow([new Date(), storeName, description, kanjo, hojo, transactionId]);
-    
+
     range.setNote(`学習済み (ID: ${transactionId})`);
     sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground('#e6f4ea');
     SpreadsheetApp.getActiveSpreadsheet().toast(`「${storeName}」の勘定科目を学習しました。`);
@@ -764,28 +759,49 @@ function handleTaxCodeRemoval(sheet, row, headers) {
   }
 }
 
+
+// --- データ記録 & 整形 ---
+
+/**
+ * ★★★ 変更点 ★★★
+ * OCR結果をスプレッドシートに記録します。学習データの判定ロジックを更新しました。
+ */
 function logOcrResult(receipts, originalFileId, learningData) {
   const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
   const originalFile = DriveApp.getFileById(originalFileId);
   const masterData = getMasterData();
+  
+  // ★★★ 追加: 学習済み店名を文字数の長い順にソート（より具体的なルールを優先するため）
+  const learnedKeys = Object.keys(learningData).sort((a, b) => b.length - a.length);
 
   const newRows = receipts.map(r => {
     let kanjo = null, hojo = null;
-    const learned = learningData[r.storeName];
+    let isLearned = false;
 
-    if (learned) {
-      kanjo = learned.kanjo;
-      hojo = learned.hojo;
-    } else {
+    // ★★★ 変更: 新しい「正規化＋部分一致」ルールで判定
+    const normalizedOcrName = normalizeStoreName(r.storeName);
+    for (const learnedKey of learnedKeys) {
+      if (normalizedOcrName.includes(learnedKey)) {
+        const learned = learningData[learnedKey];
+        kanjo = learned.kanjo;
+        hojo = learned.hojo;
+        isLearned = true;
+        console.log(`学習データを適用: OCR店名「${r.storeName}」が学習済み店名「${learned.raw}」(正規化: ${learnedKey})に一致しました。`);
+        break; // 最初に見つかった（＝最も長い）ルールを適用してループを抜ける
+      }
+    }
+
+    // 学習データに一致しなかった場合のみ、AIによる推測を実行
+    if (!isLearned) {
       try {
         kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
       } catch(e) {
         console.error(`勘定科目の推測中にエラー: ${e.toString()}`);
         kanjo = "【推測エラー】";
       }
-      hojo = ""; 
+      hojo = "";
     }
-    
+
     return [
       Utilities.getUuid(), new Date(), r.date, r.storeName, r.description,
       kanjo, hojo, r.tax_rate, r.amount, r.tax_amount, r.tax_code,
@@ -798,7 +814,7 @@ function logOcrResult(receipts, originalFileId, learningData) {
   if (newRows.length > 0) {
     const startRow = sheet.getLastRow() + 1;
     sheet.getRange(startRow, 1, newRows.length, newRows[0].length).setValues(newRows);
-    
+
     const headers = CONFIG.HEADERS.OCR_RESULT;
     const learnCheckCol = headers.indexOf('学習チェック') + 1;
     if (learnCheckCol > 0) {
@@ -807,6 +823,7 @@ function logOcrResult(receipts, originalFileId, learningData) {
   }
 }
 
+// ... logTokenUsage, deleteLearningDataByIds, getTaxCategoryCode に変更はありません ...
 function logTokenUsage(fileName, usage) {
   const sheet = getSheet(CONFIG.TOKEN_LOG_SHEET);
   sheet.appendRow([
@@ -835,11 +852,47 @@ function deleteLearningDataByIds(transactionIds) {
 
 function getTaxCategoryCode(taxRate, taxCode) {
   const hasInvoiceNumber = taxCode && taxCode.match(/^T\d{13}$/);
-  if (taxRate === 10) return hasInvoiceNumber ? '課対仕入内10%適格' : '課対仕入内10%区分80%';
-  if (taxRate === 8) return hasInvoiceNumber ? '課対仕入内軽減8%適格' : '課対仕入内軽減8%区分80%';
+  if (taxRate === 10) return hasInvoiceNumber ? '共対仕入内10%適格' : '共対仕入内10%区分80%';
+  if (taxRate === 8) return hasInvoiceNumber ? '共対仕入内軽減8%適格' : '共対仕入内軽減8%区分80%';
   return '対象外';
 }
 
+
+// --- データ取得 ---
+
+/**
+ * ★★★ 変更点 ★★★
+ * 学習データシートからデータを取得し、店名を正規化して返します。
+ */
+function getLearningData() {
+  const learningData = {};
+  try {
+    const sheet = getSheet(CONFIG.LEARNING_SHEET);
+    if (sheet && sheet.getLastRow() > 1) {
+      const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, CONFIG.HEADERS.LEARNING.length).getValues();
+      // 新しい学習データが優先されるように、下からループ
+      for (let i = data.length - 1; i >= 0; i--) {
+        const row = data[i];
+        const rawStoreName = row[1];
+        // ★★★ 追加: 店名を正規化
+        const normalizedStoreName = normalizeStoreName(rawStoreName);
+        
+        if (normalizedStoreName && !learningData[normalizedStoreName]) {
+          learningData[normalizedStoreName] = { 
+            kanjo: row[3], 
+            hojo: row[4],
+            raw: rawStoreName // デバッグや将来の拡張用に元の名前も保持
+          };
+        }
+      }
+    }
+  } catch(e) {
+    console.error("学習データの取得に失敗: " + e.toString());
+  }
+  return learningData;
+}
+
+// ... getMasterData, getFileIdFromCell に変更はありません ...
 function getMasterData() {
   try {
     const sheet = getSheet(CONFIG.MASTER_SHEET);
@@ -852,26 +905,6 @@ function getMasterData() {
   }
 }
 
-function getLearningData() {
-  const learningData = {};
-  try {
-    const sheet = getSheet(CONFIG.LEARNING_SHEET);
-    if (sheet && sheet.getLastRow() > 1) {
-      const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).getValues();
-      for (let i = data.length - 1; i >= 0; i--) {
-        const row = data[i];
-        const storeName = row[1];
-        if (storeName && !learningData[storeName]) {
-          learningData[storeName] = { kanjo: row[3], hojo: row[4] };
-        }
-      }
-    }
-  } catch(e) {
-    console.error("学習データの取得に失敗: " + e.toString());
-  }
-  return learningData;
-}
-
 function getFileIdFromCell(sheet, row) {
   const headers = (sheet.getName() === CONFIG.OCR_RESULT_SHEET) ? CONFIG.HEADERS.OCR_RESULT : CONFIG.HEADERS.EXPORTED;
   const linkCol = headers.indexOf('ファイルへのリンク') + 1;
@@ -879,13 +912,13 @@ function getFileIdFromCell(sheet, row) {
     showError('「ファイルへのリンク」列が見つかりません。');
     return null;
   }
-  
+
   const cellFormula = sheet.getRange(row, linkCol).getFormula();
   if (!cellFormula) {
     showError('選択した行にファイルへのリンクがありません。');
     return null;
   }
-  
+
   const urlMatch = cellFormula.match(/HYPERLINK\("([^"]+)"/);
   if (!urlMatch || !urlMatch[1]) {
     showError('リンクの形式が正しくありません。');
@@ -894,7 +927,7 @@ function getFileIdFromCell(sheet, row) {
 
   const fileUrl = urlMatch[1];
   const idMatch = fileUrl.match(/d\/([a-zA-Z0-9_-]{28,})/) || fileUrl.match(/id=([a-zA-Z0-9_-]{28,})/);
-  
+
   if (!idMatch || !idMatch[1]) {
     showError('ファイルURLからIDを抽出できませんでした。URL: ' + fileUrl);
     return null;
@@ -902,6 +935,31 @@ function getFileIdFromCell(sheet, row) {
   return idMatch[1];
 }
 
+
+// --- シート・フォルダ操作 ---
+
+/**
+ * ★★★ 新規追加 ★★★
+ * 店名を正規化（ノーマライゼーション）するヘルパー関数
+ * - 小文字化、全角→半角、スペース・ハイフン・法人格の削除
+ * @param {string} name - 元の店名
+ * @returns {string} 正規化された店名
+ */
+function normalizeStoreName(name) {
+  if (!name || typeof name !== 'string') {
+    return '';
+  }
+  return name
+    .toLowerCase() // 1. 小文字に変換
+    .replace(/[Ａ-Ｚａ-ｚ０-９！＂＃＄％＆＇（）＊＋，－．／：；＜＝＞？＠［＼］＾＿｀｛｜｝～]/g, s =>
+      String.fromCharCode(s.charCodeAt(0) - 0xFEE0) // 2. 全角英数字記号を半角に
+    )
+    .replace(/\s|　/g, '') // 3. 全角・半角スペースを削除
+    .replace(/-|－|—|ｰ/g, '') // 4. ハイフン・ダッシュ類を削除
+    .replace(/株式会社|有限会社|\(株\)|\（株\)|\(有\)|\（有\）/g, ''); // 5. 法人格を削除
+}
+
+// ... getSheet, getFolderByName, createSheetWithHeaders, showError に変更はありません ...
 function getSheet(name) {
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
 }
@@ -929,14 +987,14 @@ function createSheetWithHeaders(sheetName, headers, activateFilterFlag = false) 
     console.log(`シート "${sheetName}" を作成します。`);
     sheet = ss.insertSheet(sheetName);
   }
-  
+
   const currentHeaders = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
   if (JSON.stringify(currentHeaders) !== JSON.stringify(headers)) {
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
   }
 
   sheet.setFrozenRows(1);
-  
+
   if (activateFilterFlag && sheet.getFilter()) {
     sheet.getFilter().remove();
   }
