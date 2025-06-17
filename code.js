@@ -1,9 +1,6 @@
 /****************************************************************
  * 領収書OCRシステム (弥生会計連携/全機能搭載)
- * * 【必須設定】
- * 1. 以下のCONFIGオブジェクトにIDとAPIキー、CSV出力先フォルダIDを設定してください。
- * 2. このバージョンでは、拡張サービスを有効にする必要は一切ありません。
- * 3. 「勘定科目マスター」という名前のシートを作成し、A列に勘定科目、B列に摘要キーワードを記載してください。
+ * セキュリティ対策版
  ****************************************************************/
 const CONFIG = {
   //【要設定】スプレッドシートのID (URLから取得)
@@ -15,8 +12,8 @@ const CONFIG = {
   // ★追加：【要設定】弥生会計用CSVを出力するフォルダのID
   EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
 
-  //【要設定】Gemini APIキー
-  GEMINI_API_KEY: 'AIzaSyA52gv5dZCx06uvVbLyXlJwaA8WWQodzMM', // ご自身のAPIキーに書き換えてください
+  // ★★★【重要】APIキーはコードから削除しました ★★★
+  // APIキーは「プロジェクトの設定」>「スクリプトプロパティ」で管理します。
 
   // 実行時間対策：スクリプトの実行を安全に停止するまでの秒数 (5分 = 300秒)
   EXECUTION_TIME_LIMIT_SECONDS: 300,
@@ -474,8 +471,18 @@ function performOcrOnPendingFiles(startTime) {
 /****************************************************************
  * Gemini API 関連
  ****************************************************************/
+function getApiKey() {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (!apiKey) {
+    throw new Error('APIキーがスクリプトプロパティに設定されていません。プロジェクトの設定を確認してください。');
+  }
+  return apiKey;
+}
+
 function callGeminiApi(fileBlob, prompt) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  // ★★★【修正】スクリプトプロパティからAPIキーを安全に取得 ★★★
+  const apiKey = getApiKey();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
   
   const payload = {
     "contents": [{
@@ -747,7 +754,9 @@ function inferAccountTitle(storeName, description, amount, masterData) {
 ${JSON.stringify(masterListWithKeywords)}
 `;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`;
+  // ★★★【修正】スクリプトプロパティからAPIキーを安全に取得 ★★★
+  const apiKey = getApiKey();
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
   
   const payload = {
     "contents": [{"parts": [{ "text": prompt }]}],
@@ -845,12 +854,10 @@ function showReceiptPreview() {
     const fileUrl = urlMatch[1];
     let fileId = null;
 
-    // Google Driveの標準的なURL形式からIDを抽出
     const idMatch1 = fileUrl.match(/d\/([a-zA-Z0-9_-]{28,})/);
     if (idMatch1 && idMatch1[1]) {
       fileId = idMatch1[1];
     } else {
-      // 代替のURL形式 (id=...) からIDを抽出
       const idMatch2 = fileUrl.match(/id=([a-zA-Z0-9_-]{28,})/);
       if (idMatch2 && idMatch2[1]) {
         fileId = idMatch2[1];
@@ -863,8 +870,16 @@ function showReceiptPreview() {
     }
 
     const file = DriveApp.getFileById(fileId);
-    const blob = file.getBlob();
-    const dataUrl = `data:${blob.getContentType()};base64,${Utilities.base64Encode(blob.getBytes())}`;
+    const originalBlob = file.getBlob();
+    let imageBlob;
+
+    if (originalBlob.getContentType() === MimeType.PDF) {
+      imageBlob = originalBlob.getAs('image/png');
+    } else {
+      imageBlob = originalBlob;
+    }
+
+    const dataUrl = `data:${imageBlob.getContentType()};base64,${Utilities.base64Encode(imageBlob.getBytes())}`;
     const fileName = file.getName();
 
     const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
@@ -878,8 +893,6 @@ function showReceiptPreview() {
 
   } catch (e) {
     console.error('プレビュー表示中にエラーが発生しました: ' + e.toString());
-    // ★★★【修正点】★★★
-    // ui.alertの正しいシグネチャ `alert(title, prompt, buttons)` に合わせて修正
     ui.alert('エラー', 'プレビューの表示中にエラーが発生しました。\n\n詳細: ' + e.message, ui.ButtonSet.OK);
   }
 }
@@ -988,77 +1001,3 @@ function createSheetWithHeaders(sheetName, headers, activateFilterFlag = false) 
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
   }
 }
-
-
-/*
-★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-【追加手順】: 以下のHTMLコードで「Preview.html」という名前の
-HTMLファイルを新規作成してください。
-
-1. Apps Scriptエディタの左側「ファイル」の横にある「+」をクリック
-2. 「HTML」を選択
-3. ファイル名を「Preview」と入力してEnter
-4. 作成されたファイルの中身を、以下のコードで完全に上書きします。
-★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-
-<!DOCTYPE html>
-<html>
-  <head>
-    <base target="_top">
-    <style>
-      body { 
-        font-family: 'Helvetica Neue', Arial, sans-serif;
-        margin: 0; 
-        padding: 0;
-        background-color: #f0f2f5;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-      }
-      #container {
-        max-width: 95%;
-        max-height: 95vh;
-        overflow: auto;
-        background-color: white;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        display: flex;
-        flex-direction: column;
-      }
-      h3 {
-        padding: 16px 24px;
-        margin: 0;
-        background-color: #ffffff;
-        border-bottom: 1px solid #e0e0e0;
-        color: #333;
-        font-size: 16px;
-        font-weight: 600;
-        border-top-left-radius: 8px;
-        border-top-right-radius: 8px;
-        text-align: center;
-      }
-      #image-wrapper {
-        padding: 24px;
-        text-align: center;
-        overflow: auto;
-      }
-      img {
-        max-width: 100%;
-        height: auto;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-      }
-    </style>
-  </head>
-  <body>
-    <div id="container">
-      <h3><?= fileName ?></h3>
-      <div id="image-wrapper">
-        <img src="<?= dataUrl ?>" alt="領収書プレビュー">
-      </div>
-    </div>
-  </body>
-</html>
-
-*/
