@@ -1,6 +1,6 @@
 /****************************************************************
  * 領収書OCRシステム (弥生会計連携/全機能搭載)
- * セキュリティ対策版
+ * セキュリティ対策・プレビュー機能修正版
  ****************************************************************/
 const CONFIG = {
   //【要設定】スプレッドシートのID (URLから取得)
@@ -9,10 +9,9 @@ const CONFIG = {
   //【要設定】最初に領収書をアップロードするフォルダのID
   SOURCE_FOLDER_ID: '1x6k_iC7ws8YyMW31DgQKtObWbDddKair', // ご自身のIDに書き換えてください
   
-  // ★追加：【要設定】弥生会計用CSVを出力するフォルダのID
+  //【要設定】弥生会計用CSVを出力するフォルダのID
   EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
 
-  // ★★★【重要】APIキーはコードから削除しました ★★★
   // APIキーは「プロジェクトの設定」>「スクリプトプロパティ」で管理します。
 
   // 実行時間対策：スクリプトの実行を安全に停止するまでの秒数 (5分 = 300秒)
@@ -480,7 +479,6 @@ function getApiKey() {
 }
 
 function callGeminiApi(fileBlob, prompt) {
-  // ★★★【修正】スクリプトプロパティからAPIキーを安全に取得 ★★★
   const apiKey = getApiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
   
@@ -754,7 +752,6 @@ function inferAccountTitle(storeName, description, amount, masterData) {
 ${JSON.stringify(masterListWithKeywords)}
 `;
 
-  // ★★★【修正】スクリプトプロパティからAPIキーを安全に取得 ★★★
   const apiKey = getApiKey();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
   
@@ -814,7 +811,8 @@ ${JSON.stringify(masterListWithKeywords)}
  ****************************************************************/
 
 /**
- * ★追加：選択された行の領収書画像をプレビュー表示する
+ * ★★★【修正箇所】★★★
+ * プレビュー表示のメイン関数。HTMLにファイルIDを渡してダイアログを開く。
  */
 function showReceiptPreview() {
   const ui = SpreadsheetApp.getUi();
@@ -868,7 +866,28 @@ function showReceiptPreview() {
       ui.alert('ファイルURLからIDを抽出できませんでした。URL: ' + fileUrl);
       return;
     }
+    
+    // HTMLテンプレートにファイルIDを渡す
+    const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
+    htmlTemplate.fileId = fileId;
 
+    const htmlOutput = htmlTemplate.evaluate()
+        .setWidth(700)
+        .setHeight(800);
+    ui.showModalDialog(htmlOutput, `領収書プレビュー`);
+
+  } catch (e) {
+    console.error('プレビュー表示中にエラーが発生しました: ' + e.toString());
+    ui.alert('エラー', 'プレビューの表示中にエラーが発生しました。\n\n詳細: ' + e.message, ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * ★★★【新規追加】★★★
+ * HTML側から呼び出される関数。ファイルIDを受け取り、画像データを返す。
+ */
+function getImageDataForPreview(fileId) {
+  try {
     const file = DriveApp.getFileById(fileId);
     const originalBlob = file.getBlob();
     let imageBlob;
@@ -881,21 +900,18 @@ function showReceiptPreview() {
 
     const dataUrl = `data:${imageBlob.getContentType()};base64,${Utilities.base64Encode(imageBlob.getBytes())}`;
     const fileName = file.getName();
-
-    const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
-    htmlTemplate.fileName = fileName;
-    htmlTemplate.dataUrl = dataUrl;
-
-    const htmlOutput = htmlTemplate.evaluate()
-        .setWidth(700)
-        .setHeight(800);
-    ui.showModalDialog(htmlOutput, `領収書プレビュー: ${fileName}`);
-
+    
+    return { 
+      success: true, 
+      fileName: fileName,
+      dataUrl: dataUrl 
+    };
   } catch (e) {
-    console.error('プレビュー表示中にエラーが発生しました: ' + e.toString());
-    ui.alert('エラー', 'プレビューの表示中にエラーが発生しました。\n\n詳細: ' + e.message, ui.ButtonSet.OK);
+    console.error('画像データの取得中にエラー: ' + e.toString());
+    return { success: false, error: e.message };
   }
 }
+
 
 function getTaxCategoryCode(taxRate, taxCode) {
   const hasInvoiceNumber = taxCode && taxCode.match(/^T\d{13}$/);
