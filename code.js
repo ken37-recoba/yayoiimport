@@ -1,10 +1,11 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.5 Model Pinning Corrected)
+ * * 領収書OCRシステム (v4.7 Trigger-safe)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.5):
- * - 修正: ユーザー環境で動作が確認された正しいモデル名 `gemini-2.5-flash-preview-05-20` に修正。
- * - 新機能: エラーログ機能を実装。
+ * * このバージョンについて (v4.7):
+ * - 修正: mainProcess関数からUI（alert）の呼び出しを削除。これにより、時間ベースのトリガーなど、
+ * UIを操作できないコンテキストで実行された際のエラーを解消します。
+ * - 改善: 学習機能のマッチングロジックを双方向の部分一致に変更。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -47,7 +48,7 @@ function loadConfig_() {
       LEARNING_SHEET: '学習データ',
       CONFIG_SHEET: '設定',
       ERROR_LOG_SHEET: 'エラーログ',
-      GEMINI_MODEL: 'gemini-2.5-flash-preview-05-20', // ★★★ 修正: 正しいモデルバージョンに修正
+      GEMINI_MODEL: 'gemini-2.5-flash-preview-05-20',
       THINKING_BUDGET: 10000,
       YAYOI: {
         SHIKIBETSU_FLAG: '2000',
@@ -154,11 +155,17 @@ function mainProcess() {
     processNewFiles();
     performOcrOnPendingFiles(startTime);
     console.log('メインプロセスが完了しました。');
-    SpreadsheetApp.getUi().alert('処理が完了しました。');
+    // ★★★ 修正: UIを操作できないトリガー実行等でエラーになるため、alertを削除 ★★★
+    // SpreadsheetApp.getUi().alert('処理が完了しました。');
   } catch (e) {
     logError_('mainProcess', e);
     console.error("メインプロセスの実行中にエラー: " + e.toString());
-    showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
+    // UIが使えるコンテキスト（手動実行）の場合のみエラー表示を試みる
+    try {
+        showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
+    } catch (uiError) {
+        console.error("UIの表示にも失敗しました。トリガー実行中の可能性があります。");
+    }
   }
 }
 
@@ -883,16 +890,20 @@ function logOcrResult(receipts, originalFileId) {
       let isLearned = false;
 
       const normalizedOcrName = normalizeStoreName(r.storeName);
+
+      // ★★★ ここからが修正箇所 ★★★
       for (const learnedKey of learnedKeys) {
-        if (normalizedOcrName.includes(learnedKey)) {
+        // OCR結果に学習データが含まれるか、または、学習データにOCR結果が含まれるか（双方向で判定）
+        if (normalizedOcrName.includes(learnedKey) || learnedKey.includes(normalizedOcrName)) {
           const learned = learningData[learnedKey];
           kanjo = learned.kanjo;
           hojo = learned.hojo;
           isLearned = true;
-          console.log(`学習データを適用: OCR店名「${r.storeName}」が学習済み店名「${learned.raw}」(正規化: ${learnedKey})に一致しました。`);
+          console.log(`学習データを適用: OCR店名「${r.storeName}」(正規化: ${normalizedOcrName})が学習済み店名「${learned.raw}」(正規化: ${learnedKey})に一致しました。`);
           break;
         }
       }
+      // ★★★ ここまでが修正箇所 ★★★
 
       if (!isLearned) {
         kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
