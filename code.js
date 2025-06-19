@@ -1,10 +1,9 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.12 Lock Service)
+ * * 領収書OCRシステム (v4.15.1 Hotfix)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.12):
- * - 機能強化: LockServiceを導入し、mainProcessの二重実行を完全に防止。手動実行と自動実行が
- * 同時に発生しても、処理が重複しないように安定性を向上。
+ * * このバージョンについて (v4.15.1):
+ * - Hotfix: ハイライト解除機能を改善。選択されたセルの行全体の背景色を解除するように修正。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -16,6 +15,9 @@ const STATUS = {
   PROCESSED: '処理済み',
   ERROR: 'エラー',
 };
+
+// 重複警告用の背景色
+const DUPLICATE_HIGHLIGHT_COLOR = '#fff799'; // 明るい黄色
 
 /**
  * スクリプト実行時に最初に呼び出され、設定を読み込む
@@ -103,6 +105,8 @@ function onOpen() {
     menu.addItem('手動で新規ファイルを処理', 'mainProcess');
     menu.addSeparator();
     menu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
+    menu.addItem('重複の可能性をチェック', 'highlightDuplicates_');
+    menu.addItem('選択行のハイライトを解除', 'removeHighlight_');
     menu.addSeparator();
     menu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
     menu.addSeparator();
@@ -136,9 +140,11 @@ function onEdit(e) {
     const learnCheckColIndex = headers.indexOf('学習チェック') + 1;
     const taxCodeColIndex = headers.indexOf('登録番号') + 1;
 
+    // 学習チェックボックスの操作
     if (col === learnCheckColIndex) {
       handleLearningCheck(sheet, row, col, headers);
     }
+    // 登録番号の削除
     if (col === taxCodeColIndex && range.isBlank()) {
       handleTaxCodeRemoval(sheet, row, headers);
     }
@@ -150,7 +156,6 @@ function onEdit(e) {
 
 function mainProcess() {
   const lock = LockService.getScriptLock();
-  // 10秒間ロックの取得を試みる
   const gotLock = lock.tryLock(10000);
 
   if (gotLock) {
@@ -161,6 +166,7 @@ function mainProcess() {
       initializeEnvironment();
       processNewFiles();
       performOcrOnPendingFiles(startTime);
+      highlightDuplicates_();
       console.log('メインプロセスが完了しました。');
     } catch (e) {
       logError_('mainProcess', e);
@@ -171,12 +177,10 @@ function mainProcess() {
           console.error("UIの表示にも失敗しました。トリガー実行中の可能性があります。");
       }
     } finally {
-      // 処理が正常に終了しても、エラーが発生しても、必ずロックを解放する
       lock.releaseLock();
       console.log('ロックを解放しました。');
     }
   } else {
-    // ロックを取得できなかった場合（他のプロセスが実行中）
     console.log('別のプロセスが実行中のため、今回の実行はスキップされました。');
   }
 }
@@ -202,12 +206,10 @@ function createTimeBasedTrigger_() {
   const ui = SpreadsheetApp.getUi();
   
   try {
-    // このプロジェクトの既存のトリガーをすべて削除
     const triggers = ScriptApp.getProjectTriggers();
     triggers.forEach(trigger => ScriptApp.deleteTrigger(trigger));
     console.log(`既存のトリガーを ${triggers.length} 件削除しました。`);
 
-    // 15分ごとのトリガーを作成
     ScriptApp.newTrigger(functionName)
       .timeBased()
       .everyMinutes(15)
@@ -588,7 +590,7 @@ function processNewFiles() {
     console.log('ステップ1: 新規ファイルの処理が完了しました。');
   } catch(e) {
     logError_('processNewFiles', e);
-    throw e; // メインプロセスにエラーを伝播させる
+    throw e; 
   }
 }
 
@@ -987,7 +989,7 @@ function logOcrResult(receipts, originalFileId) {
     }
   } catch (e) {
     logError_('logOcrResult', e, contextInfo);
-    throw e; // エラーを呼び出し元に伝播
+    throw e;
   }
 }
 
@@ -1025,7 +1027,7 @@ function deleteLearningDataByIds(transactionIds) {
     return deletedCount;
   } catch (e) {
     logError_('deleteLearningDataByIds', e, contextInfo);
-    return 0; // エラー時は0を返す
+    return 0;
   }
 }
 
@@ -1182,4 +1184,100 @@ function createSheetWithHeaders(sheetName, headers, activateFilterFlag = false) 
 
 function showError(message, title = 'エラー') {
   SpreadsheetApp.getUi().alert(title, message, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+function highlightDuplicates_() {
+  loadConfig_();
+  console.log('重複チェックを開始します...');
+  const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) {
+    console.log('チェック対象のデータがありません。');
+    return;
+  }
+  
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = values[0];
+  const data = values.slice(1);
+
+  const dateCol = headers.indexOf('取引日');
+  const amountCol = headers.indexOf('金額(税込)');
+
+  if (dateCol === -1 || amountCol === -1) {
+    console.error('「取引日」または「金額(税込)」列が見つかりません。');
+    return;
+  }
+
+  // 既存のハイライトをクリア
+  const backgroundColors = range.getBackgrounds();
+  for (let i = 1; i < backgroundColors.length; i++) {
+    for (let j = 0; j < backgroundColors[i].length; j++) {
+      if (backgroundColors[i][j] === DUPLICATE_HIGHLIGHT_COLOR) {
+        backgroundColors[i][j] = null; // デフォルト色に戻す
+      }
+    }
+  }
+
+  const counts = {};
+  const transactionMap = {};
+
+  data.forEach((row, index) => {
+    // 空行はスキップ
+    if (row.every(cell => cell === '')) return;
+
+    const date = new Date(row[dateCol]).toLocaleDateString();
+    const amount = row[amountCol];
+    const key = `${date}_${amount}`;
+    
+    counts[key] = (counts[key] || 0) + 1;
+
+    if (!transactionMap[key]) {
+      transactionMap[key] = [];
+    }
+    transactionMap[key].push(index + 2); // 1-basedの行番号（ヘッダー分+1）
+  });
+
+  let highlightedCount = 0;
+  for (const key in counts) {
+    if (counts[key] > 1) {
+      const rowsToHighlight = transactionMap[key];
+      rowsToHighlight.forEach(rowNum => {
+        // 背景色配列を直接変更
+        for (let j = 0; j < backgroundColors[rowNum - 1].length; j++) {
+            backgroundColors[rowNum - 1][j] = DUPLICATE_HIGHLIGHT_COLOR;
+        }
+        highlightedCount++;
+      });
+    }
+  }
+
+  // 変更があった場合のみ色を更新
+  range.setBackgrounds(backgroundColors);
+  console.log(`重複チェック完了。${highlightedCount}件の重複の可能性がある取引をハイライトしました。`);
+}
+
+function removeHighlight_() {
+  loadConfig_();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
+  if (!sheet) {
+    showError(`シート「${CONFIG.OCR_RESULT_SHEET}」が見つかりません。`);
+    return;
+  }
+
+  const activeRange = sheet.getActiveRange();
+  if (activeRange.getRow() <= 1) {
+    showError('データ行を選択してください。');
+    return;
+  }
+  
+  // ★★★ 修正箇所 ★★★
+  // 選択された範囲の行全体を取得
+  const startRow = activeRange.getRow();
+  const numRows = activeRange.getNumRows();
+  const lastColumn = sheet.getLastColumn();
+  const fullRowRange = sheet.getRange(startRow, 1, numRows, lastColumn);
+
+  // 選択された行全体の背景色をデフォルトに戻す
+  fullRowRange.setBackground(null);
+  SpreadsheetApp.getActiveSpreadsheet().toast(`${numRows}行のハイライトを解除しました。`);
 }
