@@ -1,11 +1,10 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.7 Trigger-safe)
+ * * 領収書OCRシステム (v4.8 One-click Trigger Setup)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.7):
- * - 修正: mainProcess関数からUI（alert）の呼び出しを削除。これにより、時間ベースのトリガーなど、
- * UIを操作できないコンテキストで実行された際のエラーを解消します。
- * - 改善: 学習機能のマッチングロジックを双方向の部分一致に変更。
+ * * このバージョンについて (v4.8):
+ * - 新機能: メニューに「【初回のみ】定期実行をセットアップ」を追加。ワンクリックでmainProcessを
+ * 1時間ごとに実行するトリガーを設定できるようにし、利便性を向上。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -99,19 +98,23 @@ function loadConfig_() {
 function onOpen() {
   try {
     loadConfig_();
-    SpreadsheetApp.getUi()
-      .createMenu('領収書OCR')
-      .addItem('手動で新規ファイルを処理', 'mainProcess')
-      .addSeparator()
-      .addItem('選択行の領収書をプレビュー', 'showReceiptPreview')
-      .addSeparator()
-      .addItem('弥生会計形式でエクスポート', 'exportForYayoi')
-      .addItem('選択した取引をOCR結果に戻す', 'moveTransactionsBackToOcr')
-      .addSeparator()
-      .addItem('フィルタをオンにする', 'activateFilter')
-      .addItem('選択した行にダミー番号を挿入', 'insertDummyInvoiceNumber')
-      .addItem('選択した取引を削除', 'deleteSelectedTransactions')
-      .addToUi();
+    const menu = SpreadsheetApp.getUi().createMenu('領収書OCR');
+    
+    menu.addItem('手動で新規ファイルを処理', 'mainProcess');
+    menu.addSeparator();
+    // ★★★ 新規追加 ★★★
+    menu.addItem('【初回のみ】定期実行をセットアップ', 'createTimeBasedTrigger_');
+    menu.addSeparator();
+    menu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
+    menu.addSeparator();
+    menu.addItem('弥生会計形式でエクスポート', 'exportForYayoi');
+    menu.addItem('選択した取引をOCR結果に戻す', 'moveTransactionsBackToOcr');
+    menu.addSeparator();
+    menu.addItem('フィルタをオンにする', 'activateFilter');
+    menu.addItem('選択した行にダミー番号を挿入', 'insertDummyInvoiceNumber');
+    menu.addItem('選択した取引を削除', 'deleteSelectedTransactions');
+    
+    menu.addToUi();
   } catch (e) {
     logError_('onOpen', e);
     showError('スクリプトの起動中にエラーが発生しました。\n\n「設定」シートが正しく構成されているか確認してください。\n\n詳細: ' + e.message, '起動エラー');
@@ -155,12 +158,9 @@ function mainProcess() {
     processNewFiles();
     performOcrOnPendingFiles(startTime);
     console.log('メインプロセスが完了しました。');
-    // ★★★ 修正: UIを操作できないトリガー実行等でエラーになるため、alertを削除 ★★★
-    // SpreadsheetApp.getUi().alert('処理が完了しました。');
   } catch (e) {
     logError_('mainProcess', e);
     console.error("メインプロセスの実行中にエラー: " + e.toString());
-    // UIが使えるコンテキスト（手動実行）の場合のみエラー表示を試みる
     try {
         showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
     } catch (uiError) {
@@ -185,6 +185,43 @@ function initializeEnvironment() {
 /**************************************************************************************************
  * 3. ユーザーインターフェース (UI) - メニュー機能
  **************************************************************************************************/
+
+/**
+ * ★★★ 新規追加 ★★★
+ * 1時間ごとにmainProcessを実行するトリガーを作成します。
+ * 既に同じトリガーが存在する場合は何もしません。
+ */
+function createTimeBasedTrigger_() {
+  const functionName = 'mainProcess';
+  
+  try {
+    // 既存のトリガーをチェック
+    const triggers = ScriptApp.getProjectTriggers();
+    const triggerExists = triggers.some(trigger => 
+      trigger.getHandlerFunction() === functionName &&
+      trigger.getEventType() === ScriptApp.EventType.CLOCK
+    );
+
+    if (triggerExists) {
+      SpreadsheetApp.getUi().alert('設定済み', `「${functionName}」を定期実行するトリガーは、既に設定されています。`, SpreadsheetApp.getUi().ButtonSet.OK);
+      return;
+    }
+
+    // 新しいトリガーを作成
+    ScriptApp.newTrigger(functionName)
+      .timeBased()
+      .everyHours(1)
+      .create();
+    
+    SpreadsheetApp.getUi().alert('設定完了', `「${functionName}」を1時間ごとに自動実行する設定が完了しました。`, SpreadsheetApp.getUi().ButtonSet.OK);
+  
+  } catch (e) {
+    logError_('createTimeBasedTrigger_', e);
+    console.error('トリガーの作成に失敗しました: ' + e.toString());
+    showError_('トリガーの作成に失敗しました。\n\nスクリプトの実行権限を許可する必要があるかもしれません。\n詳細: ' + e.message);
+  }
+}
+
 function exportForYayoi() {
     loadConfig_();
     const ui = SpreadsheetApp.getUi();
@@ -776,7 +813,7 @@ function inferAccountTitle(storeName, description, amount, masterData) {
            return finalAnswer.accountTitle;
         }
       }
-      const errorMsg = "AIからのJSONレスポンスの形式が不正です。";
+      const errorMsg = "AIからのレスポンスの形式が不正です。";
       logError_('inferAccountTitle', new Error(errorMsg), `${contextInfo}, Response: ${responseBody}`);
       return "【形式エラー】";
     } else {
@@ -891,9 +928,7 @@ function logOcrResult(receipts, originalFileId) {
 
       const normalizedOcrName = normalizeStoreName(r.storeName);
 
-      // ★★★ ここからが修正箇所 ★★★
       for (const learnedKey of learnedKeys) {
-        // OCR結果に学習データが含まれるか、または、学習データにOCR結果が含まれるか（双方向で判定）
         if (normalizedOcrName.includes(learnedKey) || learnedKey.includes(normalizedOcrName)) {
           const learned = learningData[learnedKey];
           kanjo = learned.kanjo;
@@ -903,7 +938,6 @@ function logOcrResult(receipts, originalFileId) {
           break;
         }
       }
-      // ★★★ ここまでが修正箇所 ★★★
 
       if (!isLearned) {
         kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
@@ -1018,7 +1052,7 @@ function getMasterData() {
   } catch (e) {
     logError_("getMasterData", e);
     console.error(e);
-    showError(`シート「${CONFIG.MASTER_SHEET}」からデータを取得できませんでした。`);
+    showError(`シート「${CONFIG_MASTER_SHEET}」からデータを取得できませんでした。`);
     return [];
   }
 }
