@@ -1,10 +1,9 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.8 One-click Trigger Setup)
+ * * 領収書OCRシステム (v4.11 Trigger Interval)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.8):
- * - 新機能: メニューに「【初回のみ】定期実行をセットアップ」を追加。ワンクリックでmainProcessを
- * 1時間ごとに実行するトリガーを設定できるようにし、利便性を向上。
+ * * このバージョンについて (v4.11):
+ * - 修正: ワンクリックで設定できる定期実行トリガーの間隔を「1時間ごと」から「15分ごと」に変更。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -77,7 +76,7 @@ function loadConfig_() {
           '出力日'
         ],
         TOKEN_LOG: ['日時', 'ファイル名', '入力トークン', '思考トークン', '出力トークン', '合計トークン'],
-        LEARNING: ['学習登録日時', '店名', '摘要', '勘定科目', '補助科目', '取引ID'],
+        LEARNING: ['店名', '摘要（キーワード）', '金額条件', '金額', '勘定科目', '補助科目', '学習登録日時', '取引ID'],
         ERROR_LOG: ['日時', '関数名', 'エラーメッセージ', '関連情報', 'スタックトレース'],
       },
     };
@@ -102,8 +101,7 @@ function onOpen() {
     
     menu.addItem('手動で新規ファイルを処理', 'mainProcess');
     menu.addSeparator();
-    // ★★★ 新規追加 ★★★
-    menu.addItem('【初回のみ】定期実行をセットアップ', 'createTimeBasedTrigger_');
+    menu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_'); // メニュー名を変更
     menu.addSeparator();
     menu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
     menu.addSeparator();
@@ -185,40 +183,28 @@ function initializeEnvironment() {
 /**************************************************************************************************
  * 3. ユーザーインターフェース (UI) - メニュー機能
  **************************************************************************************************/
-
-/**
- * ★★★ 新規追加 ★★★
- * 1時間ごとにmainProcessを実行するトリガーを作成します。
- * 既に同じトリガーが存在する場合は何もしません。
- */
 function createTimeBasedTrigger_() {
   const functionName = 'mainProcess';
+  const ui = SpreadsheetApp.getUi();
   
   try {
-    // 既存のトリガーをチェック
+    // このプロジェクトの既存のトリガーをすべて削除
     const triggers = ScriptApp.getProjectTriggers();
-    const triggerExists = triggers.some(trigger => 
-      trigger.getHandlerFunction() === functionName &&
-      trigger.getEventType() === ScriptApp.EventType.CLOCK
-    );
+    triggers.forEach(trigger => ScriptApp.deleteTrigger(trigger));
+    console.log(`既存のトリガーを ${triggers.length} 件削除しました。`);
 
-    if (triggerExists) {
-      SpreadsheetApp.getUi().alert('設定済み', `「${functionName}」を定期実行するトリガーは、既に設定されています。`, SpreadsheetApp.getUi().ButtonSet.OK);
-      return;
-    }
-
-    // 新しいトリガーを作成
+    // ★★★ 修正箇所: 15分ごとのトリガーを作成 ★★★
     ScriptApp.newTrigger(functionName)
       .timeBased()
-      .everyHours(1)
+      .everyMinutes(15) // 1時間ごと -> 15分ごとに変更
       .create();
     
-    SpreadsheetApp.getUi().alert('設定完了', `「${functionName}」を1時間ごとに自動実行する設定が完了しました。`, SpreadsheetApp.getUi().ButtonSet.OK);
+    ui.alert('設定完了', `「${functionName}」を15分ごとに自動実行する設定が完了しました。`, ui.ButtonSet.OK);
   
   } catch (e) {
     logError_('createTimeBasedTrigger_', e);
     console.error('トリガーの作成に失敗しました: ' + e.toString());
-    showError_('トリガーの作成に失敗しました。\n\nスクリプトの実行権限を許可する必要があるかもしれません。\n詳細: ' + e.message);
+    ui.alert('トリガーの作成に失敗しました。\n\nスクリプトの実行権限を許可する必要があるかもしれません。\n詳細: ' + e.message);
   }
 }
 
@@ -813,7 +799,7 @@ function inferAccountTitle(storeName, description, amount, masterData) {
            return finalAnswer.accountTitle;
         }
       }
-      const errorMsg = "AIからのレスポンスの形式が不正です。";
+      const errorMsg = "AIからのJSONレスポンスの形式が不正です。";
       logError_('inferAccountTitle', new Error(errorMsg), `${contextInfo}, Response: ${responseBody}`);
       return "【形式エラー】";
     } else {
@@ -829,12 +815,6 @@ function inferAccountTitle(storeName, description, amount, masterData) {
 /**************************************************************************************************
  * 6. ヘルパー関数 (Helper Functions)
  **************************************************************************************************/
-/**
- * エラー情報をスプレッドシートに記録する
- * @param {string} functionName - エラーが発生した関数名
- * @param {Error} error - 発生したErrorオブジェクト
- * @param {string} [contextInfo=''] - エラーの文脈情報（例: ファイルID、シート名など）
- */
 function logError_(functionName, error, contextInfo = '') {
     try {
         if (!CONFIG) { // CONFIGが未ロードの場合はログをスキップ
@@ -860,12 +840,12 @@ function logError_(functionName, error, contextInfo = '') {
 
 function handleLearningCheck(sheet, row, col, headers) {
   loadConfig_();
+  const range = sheet.getRange(row, col);
   const transactionId = sheet.getRange(row, headers.indexOf('取引ID') + 1).getValue();
-  let contextInfo = `Transaction ID: ${transactionId}, Cell: ${sheet.getRange(row, col).getA1Notation()}`;
-  try {
-    const range = sheet.getRange(row, col);
-    if (!transactionId) return;
+  if (!transactionId) return;
 
+  let contextInfo = `Transaction ID: ${transactionId}, Cell: ${range.getA1Notation()}`;
+  try {
     if (range.isChecked()) {
       if (range.getNote().includes('学習済み')) return;
 
@@ -875,11 +855,20 @@ function handleLearningCheck(sheet, row, col, headers) {
       const kanjo = dataRow[headers.indexOf('勘定科目')];
       const hojo = dataRow[headers.indexOf('補助科目')];
 
-      getSheet(CONFIG.LEARNING_SHEET).appendRow([new Date(), storeName, description, kanjo, hojo, transactionId]);
+      getSheet(CONFIG.LEARNING_SHEET).appendRow([
+        storeName,
+        description, 
+        '', 
+        '', 
+        kanjo,
+        hojo,
+        new Date(),
+        transactionId
+      ]);
 
       range.setNote(`学習済み (ID: ${transactionId})`);
       sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground('#e6f4ea');
-      SpreadsheetApp.getActiveSpreadsheet().toast(`「${storeName}」の勘定科目を学習しました。`);
+      SpreadsheetApp.getActiveSpreadsheet().toast(`「${storeName}」のルールを作成しました。「学習データ」シートで詳細を編集できます。`);
     } else {
       const deletedCount = deleteLearningDataByIds([transactionId]);
       if (deletedCount > 0) {
@@ -918,35 +907,54 @@ function logOcrResult(receipts, originalFileId) {
     const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
     const originalFile = DriveApp.getFileById(originalFileId);
     const masterData = getMasterData();
-    const learningData = getLearningData();
+    const learningRules = getLearningData();
     
-    const learnedKeys = Object.keys(learningData).sort((a, b) => b.length - a.length);
-
     const newRows = receipts.map(r => {
       let kanjo = null, hojo = null;
       let isLearned = false;
 
-      const normalizedOcrName = normalizeStoreName(r.storeName);
-
-      for (const learnedKey of learnedKeys) {
-        if (normalizedOcrName.includes(learnedKey) || learnedKey.includes(normalizedOcrName)) {
-          const learned = learningData[learnedKey];
-          kanjo = learned.kanjo;
-          hojo = learned.hojo;
+      // --- 高度な学習ルールによる判定 ---
+      for (const rule of learningRules) {
+        const ocrData = {
+          storeName: normalizeStoreName(r.storeName),
+          description: r.description || '',
+          amount: Number(r.amount) || 0
+        };
+        
+        const storeMatch = !rule.storeName || ocrData.storeName.includes(rule.storeName) || rule.storeName.includes(ocrData.storeName);
+        const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
+        
+        let amountMatch = true;
+        if (rule.amountCondition && rule.amountValue !== null) { // 金額が0の場合も考慮
+            if (rule.amountCondition === '以上') {
+                amountMatch = ocrData.amount >= rule.amountValue;
+            } else if (rule.amountCondition === '未満') {
+                amountMatch = ocrData.amount < rule.amountValue;
+            }
+        }
+        
+        if (storeMatch && descMatch && amountMatch) {
+          kanjo = rule.kanjo;
+          hojo = rule.hojo;
           isLearned = true;
-          console.log(`学習データを適用: OCR店名「${r.storeName}」(正規化: ${normalizedOcrName})が学習済み店名「${learned.raw}」(正規化: ${learnedKey})に一致しました。`);
+          console.log(`学習ルールを適用: OCRデータ(店名:${r.storeName}, 摘要:${ocrData.description}, 金額:${ocrData.amount}) がルール(店名:${rule.rawStoreName}, 摘要キーワード:${rule.descriptionKeyword}, 金額条件:${rule.amountCondition}${rule.amountValue})に一致しました。`);
           break;
         }
       }
 
+      // --- AIによる推測 (学習ルールに一致しなかった場合) ---
       if (!isLearned) {
+        console.log("学習ルールに一致しなかったため、AIによる推測を実行します。");
         kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
         hojo = "";
       }
 
+      const truncatedAmount = Math.trunc(r.amount || 0);
+      const truncatedTaxAmount = Math.trunc(r.tax_amount || 0);
+
       return [
         Utilities.getUuid(), new Date(), r.date, r.storeName, r.description,
-        kanjo, hojo, r.tax_rate, r.amount, r.tax_amount, r.tax_code,
+        kanjo, hojo, r.tax_rate, truncatedAmount, truncatedTaxAmount, r.tax_code,
         getTaxCategoryCode(r.tax_rate, r.tax_code),
         `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`,
         r.note
@@ -1017,30 +1025,44 @@ function getTaxCategoryCode(taxRate, taxCode) {
 
 function getLearningData() {
   loadConfig_();
-  const learningData = {};
+  const learningRules = [];
   try {
     const sheet = getSheet(CONFIG.LEARNING_SHEET);
-    if (sheet && sheet.getLastRow() > 1) {
-      const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, CONFIG.HEADERS.LEARNING.length).getValues();
-      for (let i = data.length - 1; i >= 0; i--) {
-        const row = data[i];
-        const rawStoreName = row[1];
-        const normalizedStoreName = normalizeStoreName(rawStoreName);
-        
-        if (normalizedStoreName && !learningData[normalizedStoreName]) {
-          learningData[normalizedStoreName] = { 
-            kanjo: row[3], 
-            hojo: row[4],
-            raw: rawStoreName
-          };
-        }
-      }
+    if (!sheet || sheet.getLastRow() < 2) return [];
+
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, CONFIG.HEADERS.LEARNING.length).getValues();
+    const headers = CONFIG.HEADERS.LEARNING;
+    const COL = {
+        STORE_NAME: headers.indexOf('店名'),
+        DESC_KEYWORD: headers.indexOf('摘要（キーワード）'),
+        AMOUNT_COND: headers.indexOf('金額条件'),
+        AMOUNT_VAL: headers.indexOf('金額'),
+        KANJO: headers.indexOf('勘定科目'),
+        HOJO: headers.indexOf('補助科目'),
+    };
+
+    for (const row of data) {
+      if (!row[COL.KANJO]) continue;
+      
+      const amountValue = row[COL.AMOUNT_VAL];
+      
+      learningRules.push({
+        rawStoreName: row[COL.STORE_NAME] || '',
+        storeName: normalizeStoreName(row[COL.STORE_NAME] || ''),
+        descriptionKeyword: row[COL.DESC_KEYWORD] || '',
+        amountCondition: row[COL.AMOUNT_COND] || '',
+        amountValue: (amountValue !== '' && !isNaN(amountValue)) ? Number(amountValue) : null,
+        kanjo: row[COL.KANJO],
+        hojo: row[COL.HOJO] || ''
+      });
     }
+    console.log(`学習データを ${learningRules.length} 件読み込みました。`);
+
   } catch(e) {
     logError_("getLearningData", e);
     console.error("学習データの取得に失敗: " + e.toString());
   }
-  return learningData;
+  return learningRules;
 }
 
 function getMasterData() {
@@ -1052,7 +1074,7 @@ function getMasterData() {
   } catch (e) {
     logError_("getMasterData", e);
     console.error(e);
-    showError(`シート「${CONFIG_MASTER_SHEET}」からデータを取得できませんでした。`);
+    showError(`シート「${CONFIG.MASTER_SHEET}」からデータを取得できませんでした。`);
     return [];
   }
 }
