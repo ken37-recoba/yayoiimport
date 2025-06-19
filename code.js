@@ -1,9 +1,10 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.11 Trigger Interval)
+ * * 領収書OCRシステム (v4.12 Lock Service)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.11):
- * - 修正: ワンクリックで設定できる定期実行トリガーの間隔を「1時間ごと」から「15分ごと」に変更。
+ * * このバージョンについて (v4.12):
+ * - 機能強化: LockServiceを導入し、mainProcessの二重実行を完全に防止。手動実行と自動実行が
+ * 同時に発生しても、処理が重複しないように安定性を向上。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -101,7 +102,7 @@ function onOpen() {
     
     menu.addItem('手動で新規ファイルを処理', 'mainProcess');
     menu.addSeparator();
-    menu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_'); // メニュー名を変更
+    menu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
     menu.addSeparator();
     menu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
     menu.addSeparator();
@@ -143,27 +144,40 @@ function onEdit(e) {
     }
   } catch (err) {
     logError_('onEdit', err);
-    console.error("onEdit Error: " + err.toString()); // ユーザー操作を妨げないようUIエラーは表示しない
+    console.error("onEdit Error: " + err.toString());
   }
 }
 
 function mainProcess() {
-  try {
-    loadConfig_();
-    const startTime = new Date();
-    console.log('メインプロセスを開始します。');
-    initializeEnvironment();
-    processNewFiles();
-    performOcrOnPendingFiles(startTime);
-    console.log('メインプロセスが完了しました。');
-  } catch (e) {
-    logError_('mainProcess', e);
-    console.error("メインプロセスの実行中にエラー: " + e.toString());
+  const lock = LockService.getScriptLock();
+  // 10秒間ロックの取得を試みる
+  const gotLock = lock.tryLock(10000);
+
+  if (gotLock) {
     try {
-        showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
-    } catch (uiError) {
-        console.error("UIの表示にも失敗しました。トリガー実行中の可能性があります。");
+      loadConfig_();
+      const startTime = new Date();
+      console.log('メインプロセスを開始します。');
+      initializeEnvironment();
+      processNewFiles();
+      performOcrOnPendingFiles(startTime);
+      console.log('メインプロセスが完了しました。');
+    } catch (e) {
+      logError_('mainProcess', e);
+      console.error("メインプロセスの実行中にエラー: " + e.toString());
+      try {
+          showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
+      } catch (uiError) {
+          console.error("UIの表示にも失敗しました。トリガー実行中の可能性があります。");
+      }
+    } finally {
+      // 処理が正常に終了しても、エラーが発生しても、必ずロックを解放する
+      lock.releaseLock();
+      console.log('ロックを解放しました。');
     }
+  } else {
+    // ロックを取得できなかった場合（他のプロセスが実行中）
+    console.log('別のプロセスが実行中のため、今回の実行はスキップされました。');
   }
 }
 
@@ -193,10 +207,10 @@ function createTimeBasedTrigger_() {
     triggers.forEach(trigger => ScriptApp.deleteTrigger(trigger));
     console.log(`既存のトリガーを ${triggers.length} 件削除しました。`);
 
-    // ★★★ 修正箇所: 15分ごとのトリガーを作成 ★★★
+    // 15分ごとのトリガーを作成
     ScriptApp.newTrigger(functionName)
       .timeBased()
-      .everyMinutes(15) // 1時間ごと -> 15分ごとに変更
+      .everyMinutes(15)
       .create();
     
     ui.alert('設定完了', `「${functionName}」を15分ごとに自動実行する設定が完了しました。`, ui.ButtonSet.OK);
@@ -799,7 +813,7 @@ function inferAccountTitle(storeName, description, amount, masterData) {
            return finalAnswer.accountTitle;
         }
       }
-      const errorMsg = "AIからのJSONレスポンスの形式が不正です。";
+      const errorMsg = "AIからのレスポンスの形式が不正です。";
       logError_('inferAccountTitle', new Error(errorMsg), `${contextInfo}, Response: ${responseBody}`);
       return "【形式エラー】";
     } else {
