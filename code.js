@@ -1,9 +1,11 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.15.1 Hotfix)
+ * * 領収書OCRシステム (v4.16 Critical Error Highlighter)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.15.1):
- * - Hotfix: ハイライト解除機能を改善。選択されたセルの行全体の背景色を解除するように修正。
+ * * このバージョンについて (v4.16):
+ * - 新機能: 重大なエラーのハイライト機能を追加。AIが日付の異常、金額の不整合、必須項目の
+ * 欠落などを検知した場合、該当行を赤色でハイライトし、ユーザーに即時確認を促します。
+ * - 改善: Gemini APIへのプロンプトを強化し、エラー検出能力を向上。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -16,8 +18,9 @@ const STATUS = {
   ERROR: 'エラー',
 };
 
-// 重複警告用の背景色
+// ハイライト用の背景色
 const DUPLICATE_HIGHLIGHT_COLOR = '#fff799'; // 明るい黄色
+const CRITICAL_ERROR_HIGHLIGHT_COLOR = '#ffcccc'; // 明るい赤色
 
 /**
  * スクリプト実行時に最初に呼び出され、設定を読み込む
@@ -89,7 +92,6 @@ function loadConfig_() {
     }
 
   } catch (e) {
-    // この段階のエラーはログシートに書き込めない可能性が高いため、UIにのみ表示
     SpreadsheetApp.getUi().alert('設定の読み込みエラー', e.message, SpreadsheetApp.getUi().ButtonSet.OK);
     throw e;
   }
@@ -106,6 +108,7 @@ function onOpen() {
     menu.addSeparator();
     menu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
     menu.addItem('重複の可能性をチェック', 'highlightDuplicates_');
+    menu.addItem('重大なエラーをチェック', 'highlightCriticalErrors_'); // ★★★ メニュー追加
     menu.addItem('選択行のハイライトを解除', 'removeHighlight_');
     menu.addSeparator();
     menu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
@@ -167,6 +170,7 @@ function mainProcess() {
       processNewFiles();
       performOcrOnPendingFiles(startTime);
       highlightDuplicates_();
+      highlightCriticalErrors_(); // ★★★ 処理の最後にエラーチェックを実行
       console.log('メインプロセスが完了しました。');
     } catch (e) {
       logError_('mainProcess', e);
@@ -717,6 +721,7 @@ function callGeminiApi(fileBlob, prompt) {
   }
 }
 
+// ★★★ 修正箇所: プロンプトを強化し、エラー検出の指示を追加 ★★★
 function getGeminiPrompt(filename) {
   return `
 processing_context:
@@ -747,7 +752,7 @@ output_specifications:
       tax_amount: number; // amountのうち、消費税額に該当する金額。
       tax_code: string; // 登録番号（Tから始まる13桁の番号）。同じ領収書なら同じ番号を記載。
       filename: string; // 入力されたデータのファイル名。同じ領収書なら同じファイル名を記載。
-      note: string; // 特記事項（読取り、消費税、登録番号の不備について記載する）
+      note: string; // 【重要】特記事項。以下の special_note_rules に従い、問題点を具体的に記述する。
     }
     type Receipts = Receipt[];
   filename_rule:
@@ -769,11 +774,19 @@ data_rules:
     - 複数の内容を列挙する場合の区切り文字は " | " とする
   missing_data_rule:
     description: 記載すべき内容が存在しない場合、数値は0、文字列はnullとする。
-special_note_examples:
-  - condition: 手書き文字等で文字認識に懸念がある場合
+special_note_rules:
+  - rule: 領収書が白紙、または文字が著しく不鮮明で内容が全く読み取れない場合。
+    note_content: "【要確認：読み取り不可】"
+  - rule: dateが未来の日付、または暦上存在しない日付（例: 2月31日）になっている場合。
+    note_content: "【要確認：日付エラー】"
+  - rule: amountやtax_amountがマイナス、または消費税額が合計金額を上回るなど、金額の計算に矛盾がある場合。
+    note_content: "【要確認：金額不整合】"
+  - rule: amountまたはdateが読み取れずnullになった場合。
+    note_content: "【要確認：必須項目欠落】"
+  - rule: tax_codeがTで始まるが13桁ではないなど、形式が明らかに不正な場合。
+    note_content: "【要確認：登録番号形式エラー】"
+  - rule: 上記以外で軽微な懸念がある場合（例: 一部の文字が不鮮明）。
     note_content: "印字不鮮明"
-  - condition: 金額の合計や日付形式に矛盾がある場合
-    note_content: "合計金額の不一致"
 `;
 }
 
@@ -815,7 +828,7 @@ function inferAccountTitle(storeName, description, amount, masterData) {
            return finalAnswer.accountTitle;
         }
       }
-      const errorMsg = "AIからのレスポンスの形式が不正です。";
+      const errorMsg = "AIからのJSONレスポンスの形式が不正です。";
       logError_('inferAccountTitle', new Error(errorMsg), `${contextInfo}, Response: ${responseBody}`);
       return "【形式エラー】";
     } else {
@@ -929,7 +942,6 @@ function logOcrResult(receipts, originalFileId) {
       let kanjo = null, hojo = null;
       let isLearned = false;
 
-      // --- 高度な学習ルールによる判定 ---
       for (const rule of learningRules) {
         const ocrData = {
           storeName: normalizeStoreName(r.storeName),
@@ -941,7 +953,7 @@ function logOcrResult(receipts, originalFileId) {
         const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
         
         let amountMatch = true;
-        if (rule.amountCondition && rule.amountValue !== null) { // 金額が0の場合も考慮
+        if (rule.amountCondition && rule.amountValue !== null) {
             if (rule.amountCondition === '以上') {
                 amountMatch = ocrData.amount >= rule.amountValue;
             } else if (rule.amountCondition === '未満') {
@@ -958,7 +970,6 @@ function logOcrResult(receipts, originalFileId) {
         }
       }
 
-      // --- AIによる推測 (学習ルールに一致しなかった場合) ---
       if (!isLearned) {
         console.log("学習ルールに一致しなかったため、AIによる推測を実行します。");
         kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
@@ -1208,12 +1219,11 @@ function highlightDuplicates_() {
     return;
   }
 
-  // 既存のハイライトをクリア
   const backgroundColors = range.getBackgrounds();
   for (let i = 1; i < backgroundColors.length; i++) {
     for (let j = 0; j < backgroundColors[i].length; j++) {
       if (backgroundColors[i][j] === DUPLICATE_HIGHLIGHT_COLOR) {
-        backgroundColors[i][j] = null; // デフォルト色に戻す
+        backgroundColors[i][j] = null;
       }
     }
   }
@@ -1222,19 +1232,13 @@ function highlightDuplicates_() {
   const transactionMap = {};
 
   data.forEach((row, index) => {
-    // 空行はスキップ
     if (row.every(cell => cell === '')) return;
-
     const date = new Date(row[dateCol]).toLocaleDateString();
     const amount = row[amountCol];
     const key = `${date}_${amount}`;
-    
     counts[key] = (counts[key] || 0) + 1;
-
-    if (!transactionMap[key]) {
-      transactionMap[key] = [];
-    }
-    transactionMap[key].push(index + 2); // 1-basedの行番号（ヘッダー分+1）
+    if (!transactionMap[key]) transactionMap[key] = [];
+    transactionMap[key].push(index + 2);
   });
 
   let highlightedCount = 0;
@@ -1242,7 +1246,6 @@ function highlightDuplicates_() {
     if (counts[key] > 1) {
       const rowsToHighlight = transactionMap[key];
       rowsToHighlight.forEach(rowNum => {
-        // 背景色配列を直接変更
         for (let j = 0; j < backgroundColors[rowNum - 1].length; j++) {
             backgroundColors[rowNum - 1][j] = DUPLICATE_HIGHLIGHT_COLOR;
         }
@@ -1251,9 +1254,43 @@ function highlightDuplicates_() {
     }
   }
 
-  // 変更があった場合のみ色を更新
   range.setBackgrounds(backgroundColors);
   console.log(`重複チェック完了。${highlightedCount}件の重複の可能性がある取引をハイライトしました。`);
+}
+
+function highlightCriticalErrors_() {
+  loadConfig_();
+  console.log('重大なエラーのチェックを開始します...');
+  const sheet = getSheet(CONFIG.OCR_RESULT_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) {
+    console.log('チェック対象のデータがありません。');
+    return;
+  }
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const headers = values[0];
+  const data = values.slice(1);
+
+  const noteCol = headers.indexOf('備考');
+  if (noteCol === -1) {
+    console.error('「備考」列が見つかりません。');
+    return;
+  }
+  
+  const backgroundColors = range.getBackgrounds();
+  
+  data.forEach((row, index) => {
+    const note = row[noteCol];
+    if (note && note.includes("【要確認")) {
+      for (let j = 0; j < backgroundColors[index + 1].length; j++) {
+        backgroundColors[index + 1][j] = CRITICAL_ERROR_HIGHLIGHT_COLOR;
+      }
+    }
+  });
+
+  range.setBackgrounds(backgroundColors);
+  console.log('重大なエラーのチェックが完了しました。');
 }
 
 function removeHighlight_() {
@@ -1270,14 +1307,11 @@ function removeHighlight_() {
     return;
   }
   
-  // ★★★ 修正箇所 ★★★
-  // 選択された範囲の行全体を取得
   const startRow = activeRange.getRow();
   const numRows = activeRange.getNumRows();
   const lastColumn = sheet.getLastColumn();
   const fullRowRange = sheet.getRange(startRow, 1, numRows, lastColumn);
 
-  // 選択された行全体の背景色をデフォルトに戻す
   fullRowRange.setBackground(null);
   SpreadsheetApp.getActiveSpreadsheet().toast(`${numRows}行のハイライトを解除しました。`);
 }
