@@ -1,10 +1,10 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.17.1 Hotfix)
+ * * 領収書OCRシステム (v4.18 Description Template)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.17.1):
- * - Hotfix: ファイル名の自動リネームで参照していた `generateNewFileName_` 関数が
- * 欠落していた問題を修正。
+ * * このバージョンについて (v4.18):
+ * - 機能強化: 摘要の整形・自動生成機能を追加。「学習データ」シートに「摘要のテンプレート」列を追加し、
+ * ルールに基づいて摘要を自動生成できるようにすることで、データの一貫性を向上。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -81,7 +81,8 @@ function loadConfig_() {
           '出力日'
         ],
         TOKEN_LOG: ['日時', 'ファイル名', '入力トークン', '思考トークン', '出力トークン', '合計トークン'],
-        LEARNING: ['店名', '摘要（キーワード）', '金額条件', '金額', '勘定科目', '補助科目', '学習登録日時', '取引ID'],
+        // ★★★ 修正: 学習データのヘッダーを新しいルールに合わせて変更 ★★★
+        LEARNING: ['店名', '摘要（キーワード）', '金額条件', '金額', '勘定科目', '補助科目', '摘要のテンプレート', '学習登録日時', '取引ID'],
         ERROR_LOG: ['日時', '関数名', 'エラーメッセージ', '関連情報', 'スタックトレース'],
       },
     };
@@ -831,7 +832,7 @@ function inferAccountTitle(storeName, description, amount, masterData) {
            return finalAnswer.accountTitle;
         }
       }
-      const errorMsg = "AIからのJSONレスポンスの形式が不正です。";
+      const errorMsg = "AIからのレスポンスの形式が不正です。";
       logError_('inferAccountTitle', new Error(errorMsg), `${contextInfo}, Response: ${responseBody}`);
       return "【形式エラー】";
     } else {
@@ -894,6 +895,7 @@ function handleLearningCheck(sheet, row, col, headers) {
         '', 
         kanjo,
         hojo,
+        '', // 摘要テンプレート用の空欄
         new Date(),
         transactionId
       ]);
@@ -944,6 +946,7 @@ function logOcrResult(receipts, originalFileId) {
     const newRows = receipts.map(r => {
       let kanjo = null, hojo = null;
       let isLearned = false;
+      let finalDescription = r.description || '';
 
       // --- 高度な学習ルールによる判定 ---
       for (const rule of learningRules) {
@@ -968,6 +971,13 @@ function logOcrResult(receipts, originalFileId) {
         if (storeMatch && descMatch && amountMatch) {
           kanjo = rule.kanjo;
           hojo = rule.hojo;
+          // ★★★ 摘要テンプレートの適用 ★★★
+          if (rule.descriptionTemplate) {
+            finalDescription = rule.descriptionTemplate
+              .replace(/【日付】/g, r.date || '')
+              .replace(/【店名】/g, r.storeName || '')
+              .replace(/【金額】/g, Math.trunc(r.amount || 0));
+          }
           isLearned = true;
           console.log(`学習ルールを適用: OCRデータ(店名:${r.storeName}, 摘要:${ocrData.description}, 金額:${ocrData.amount}) がルール(店名:${rule.rawStoreName}, 摘要キーワード:${rule.descriptionKeyword}, 金額条件:${rule.amountCondition}${rule.amountValue})に一致しました。`);
           break;
@@ -985,7 +995,7 @@ function logOcrResult(receipts, originalFileId) {
       const truncatedTaxAmount = Math.trunc(r.tax_amount || 0);
 
       return [
-        Utilities.getUuid(), new Date(), r.date, r.storeName, r.description,
+        Utilities.getUuid(), new Date(), r.date, r.storeName, finalDescription,
         kanjo, hojo, r.tax_rate, truncatedAmount, truncatedTaxAmount, r.tax_code,
         getTaxCategoryCode(r.tax_rate, r.tax_code),
         `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`,
@@ -1071,6 +1081,7 @@ function getLearningData() {
         AMOUNT_VAL: headers.indexOf('金額'),
         KANJO: headers.indexOf('勘定科目'),
         HOJO: headers.indexOf('補助科目'),
+        DESC_TEMPLATE: headers.indexOf('摘要のテンプレート'), // ★★★ 追加
     };
 
     for (const row of data) {
@@ -1085,7 +1096,8 @@ function getLearningData() {
         amountCondition: row[COL.AMOUNT_COND] || '',
         amountValue: (amountValue !== '' && !isNaN(amountValue)) ? Number(amountValue) : null,
         kanjo: row[COL.KANJO],
-        hojo: row[COL.HOJO] || ''
+        hojo: row[COL.HOJO] || '',
+        descriptionTemplate: row[COL.DESC_TEMPLATE] || '', // ★★★ 追加
       });
     }
     console.log(`学習データを ${learningRules.length} 件読み込みました。`);
@@ -1323,13 +1335,6 @@ function highlightCriticalErrors_() {
   console.log('重大なエラーのチェックが完了しました。');
 }
 
-/**
- * ★★★ 新規追加 ★★★
- * OCR結果を基に新しいファイル名を生成する
- * @param {object} transaction - OCR結果の最初の取引オブジェクト
- * @param {string} originalFileName - 元のファイル名
- * @returns {string} - 新しいファイル名
- */
 function generateNewFileName_(transaction, originalFileName) {
   try {
     const date = new Date(transaction.date);
