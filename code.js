@@ -1,10 +1,10 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.16.3 Hotfix)
+ * * 領収書OCRシステム (v4.17.1 Hotfix)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.16.3):
- * - Hotfix: ハイライトの優先順位を修正。重複チェック時に、既に重大なエラー（赤色）で
- * ハイライトされている行は上書きしないようにロジックを修正。
+ * * このバージョンについて (v4.17.1):
+ * - Hotfix: ファイル名の自動リネームで参照していた `generateNewFileName_` 関数が
+ * 欠落していた問題を修正。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -603,8 +603,7 @@ function performOcrOnPendingFiles(startTime) {
   const fileListSheet = getSheet(CONFIG.FILE_LIST_SHEET);
   const archiveFolder = DriveApp.getFolderById(CONFIG.ARCHIVE_FOLDER_ID);
   const data = fileListSheet.getDataRange().getValues();
-  const learningData = getLearningData();
-
+  
   for (let i = 1; i < data.length; i++) {
     const elapsedTime = (new Date().getTime() - startTime.getTime()) / 1000;
     if (elapsedTime > CONFIG.EXECUTION_TIME_LIMIT_SECONDS) {
@@ -634,6 +633,12 @@ function performOcrOnPendingFiles(startTime) {
           if (ocrData && ocrData.length > 0) {
             logOcrResult(ocrData, file.getId());
             logTokenUsage(fileName, result.usage);
+            
+            const firstTransaction = ocrData[0];
+            const newFileName = generateNewFileName_(firstTransaction, fileName);
+            file.setName(newFileName);
+            console.log(`ファイル名を変更しました: ${newFileName}`);
+
             fileListSheet.getRange(rowNum, 3, 1, 2).setValues([[STATUS.PROCESSED, '']]);
             file.moveTo(archiveFolder);
             console.log(`OCR処理成功: ${fileName}`);
@@ -772,7 +777,7 @@ data_rules:
     - 複数の内容を列挙する場合の区切り文字は " | " とする
   missing_data_rule:
     description: 記載すべき内容が存在しない場合、数値は0、文字列はnullとする。
-special_note_rules:
+special_note_examples:
   - rule: 領収書が白紙、または文字が著しく不鮮明で内容が全く読み取れない場合。
     note_content: "【要確認：読み取り不可】"
   - rule: dateが未来の日付、または暦上存在しない日付（例: 2月31日）になっている場合。
@@ -1246,7 +1251,6 @@ function highlightDuplicates_() {
     if (counts[key] > 1) {
       const rowsToHighlight = transactionMap[key];
       rowsToHighlight.forEach(rowNum => {
-        // ★★★ 修正箇所: 赤色でなければ黄色にする ★★★
         if (backgroundColors[rowNum - 1][0] !== CRITICAL_ERROR_HIGHLIGHT_COLOR) {
             for (let j = 0; j < backgroundColors[rowNum - 1].length; j++) {
                 backgroundColors[rowNum - 1][j] = DUPLICATE_HIGHLIGHT_COLOR;
@@ -1317,4 +1321,32 @@ function highlightCriticalErrors_() {
 
   range.setBackgrounds(backgroundColors);
   console.log('重大なエラーのチェックが完了しました。');
+}
+
+/**
+ * ★★★ 新規追加 ★★★
+ * OCR結果を基に新しいファイル名を生成する
+ * @param {object} transaction - OCR結果の最初の取引オブジェクト
+ * @param {string} originalFileName - 元のファイル名
+ * @returns {string} - 新しいファイル名
+ */
+function generateNewFileName_(transaction, originalFileName) {
+  try {
+    const date = new Date(transaction.date);
+    const formattedDate = Utilities.formatDate(date, "JST", "yyyyMMdd");
+    
+    // ファイル名に使えない文字を置換
+    const safeStoreName = (transaction.storeName || '不明な店名').replace(/[\\/:*?"<>|]/g, '-');
+    
+    const amount = Math.trunc(transaction.amount || 0);
+    
+    const extensionMatch = originalFileName.match(/\.([^.]+)$/);
+    const extension = extensionMatch ? extensionMatch[1] : 'jpg';
+
+    return `${formattedDate}_${safeStoreName}_${amount}円.${extension}`;
+  } catch (e) {
+    console.error(`新しいファイル名の生成に失敗しました: ${e.toString()}`);
+    // エラーが発生した場合は、元のファイル名をそのまま返す
+    return originalFileName;
+  }
 }
