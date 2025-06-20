@@ -1,11 +1,10 @@
 /**************************************************************************************************
- * * 領収書OCRシステム (v4.16 Critical Error Highlighter)
+ * * 領収書OCRシステム (v4.16.3 Hotfix)
  * * 概要:
  * Google Drive上の領収書をGemini APIでOCR処理し、スプレッドシートに記録。
- * * このバージョンについて (v4.16):
- * - 新機能: 重大なエラーのハイライト機能を追加。AIが日付の異常、金額の不整合、必須項目の
- * 欠落などを検知した場合、該当行を赤色でハイライトし、ユーザーに即時確認を促します。
- * - 改善: Gemini APIへのプロンプトを強化し、エラー検出能力を向上。
+ * * このバージョンについて (v4.16.3):
+ * - Hotfix: ハイライトの優先順位を修正。重複チェック時に、既に重大なエラー（赤色）で
+ * ハイライトされている行は上書きしないようにロジックを修正。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -108,7 +107,7 @@ function onOpen() {
     menu.addSeparator();
     menu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
     menu.addItem('重複の可能性をチェック', 'highlightDuplicates_');
-    menu.addItem('重大なエラーをチェック', 'highlightCriticalErrors_'); // ★★★ メニュー追加
+    menu.addItem('重大なエラーをチェック', 'highlightCriticalErrors_');
     menu.addItem('選択行のハイライトを解除', 'removeHighlight_');
     menu.addSeparator();
     menu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
@@ -169,8 +168,8 @@ function mainProcess() {
       initializeEnvironment();
       processNewFiles();
       performOcrOnPendingFiles(startTime);
+      highlightCriticalErrors_();
       highlightDuplicates_();
-      highlightCriticalErrors_(); // ★★★ 処理の最後にエラーチェックを実行
       console.log('メインプロセスが完了しました。');
     } catch (e) {
       logError_('mainProcess', e);
@@ -721,7 +720,6 @@ function callGeminiApi(fileBlob, prompt) {
   }
 }
 
-// ★★★ 修正箇所: プロンプトを強化し、エラー検出の指示を追加 ★★★
 function getGeminiPrompt(filename) {
   return `
 processing_context:
@@ -942,6 +940,7 @@ function logOcrResult(receipts, originalFileId) {
       let kanjo = null, hojo = null;
       let isLearned = false;
 
+      // --- 高度な学習ルールによる判定 ---
       for (const rule of learningRules) {
         const ocrData = {
           storeName: normalizeStoreName(r.storeName),
@@ -953,7 +952,7 @@ function logOcrResult(receipts, originalFileId) {
         const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
         
         let amountMatch = true;
-        if (rule.amountCondition && rule.amountValue !== null) {
+        if (rule.amountCondition && rule.amountValue !== null) { // 金額が0の場合も考慮
             if (rule.amountCondition === '以上') {
                 amountMatch = ocrData.amount >= rule.amountValue;
             } else if (rule.amountCondition === '未満') {
@@ -970,6 +969,7 @@ function logOcrResult(receipts, originalFileId) {
         }
       }
 
+      // --- AIによる推測 (学習ルールに一致しなかった場合) ---
       if (!isLearned) {
         console.log("学習ルールに一致しなかったため、AIによる推測を実行します。");
         kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
@@ -1246,16 +1246,42 @@ function highlightDuplicates_() {
     if (counts[key] > 1) {
       const rowsToHighlight = transactionMap[key];
       rowsToHighlight.forEach(rowNum => {
-        for (let j = 0; j < backgroundColors[rowNum - 1].length; j++) {
-            backgroundColors[rowNum - 1][j] = DUPLICATE_HIGHLIGHT_COLOR;
+        // ★★★ 修正箇所: 赤色でなければ黄色にする ★★★
+        if (backgroundColors[rowNum - 1][0] !== CRITICAL_ERROR_HIGHLIGHT_COLOR) {
+            for (let j = 0; j < backgroundColors[rowNum - 1].length; j++) {
+                backgroundColors[rowNum - 1][j] = DUPLICATE_HIGHLIGHT_COLOR;
+            }
+            highlightedCount++;
         }
-        highlightedCount++;
       });
     }
   }
 
   range.setBackgrounds(backgroundColors);
   console.log(`重複チェック完了。${highlightedCount}件の重複の可能性がある取引をハイライトしました。`);
+}
+
+function removeHighlight_() {
+  loadConfig_();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
+  if (!sheet) {
+    showError(`シート「${CONFIG.OCR_RESULT_SHEET}」が見つかりません。`);
+    return;
+  }
+
+  const activeRange = sheet.getActiveRange();
+  if (activeRange.getRow() <= 1) {
+    showError('データ行を選択してください。');
+    return;
+  }
+  
+  const startRow = activeRange.getRow();
+  const numRows = activeRange.getNumRows();
+  const lastColumn = sheet.getLastColumn();
+  const fullRowRange = sheet.getRange(startRow, 1, numRows, lastColumn);
+
+  fullRowRange.setBackground(null);
+  SpreadsheetApp.getActiveSpreadsheet().toast(`${numRows}行のハイライトを解除しました。`);
 }
 
 function highlightCriticalErrors_() {
@@ -1291,27 +1317,4 @@ function highlightCriticalErrors_() {
 
   range.setBackgrounds(backgroundColors);
   console.log('重大なエラーのチェックが完了しました。');
-}
-
-function removeHighlight_() {
-  loadConfig_();
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.OCR_RESULT_SHEET);
-  if (!sheet) {
-    showError(`シート「${CONFIG.OCR_RESULT_SHEET}」が見つかりません。`);
-    return;
-  }
-
-  const activeRange = sheet.getActiveRange();
-  if (activeRange.getRow() <= 1) {
-    showError('データ行を選択してください。');
-    return;
-  }
-  
-  const startRow = activeRange.getRow();
-  const numRows = activeRange.getNumRows();
-  const lastColumn = sheet.getLastColumn();
-  const fullRowRange = sheet.getRange(startRow, 1, numRows, lastColumn);
-
-  fullRowRange.setBackground(null);
-  SpreadsheetApp.getActiveSpreadsheet().toast(`${numRows}行のハイライトを解除しました。`);
 }
