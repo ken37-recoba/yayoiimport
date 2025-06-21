@@ -42,7 +42,10 @@ function loadConfig_() {
     CONFIG = {
       SPREADSHEET_ID: SpreadsheetApp.getActiveSpreadsheet().getId(),
       SOURCE_FOLDER_ID: settings['領収書データ化フォルダID'],
-      EXPORT_FOLDER_ID: settings['クライアントフォルダID'],
+      // ▼▼▼【変更箇所】▼▼▼
+      // 弥生会計形式のエクスポート先フォルダIDを指定された固定IDに変更。
+      EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
+      // ▲▲▲【変更箇所】▲▲▲
       ARCHIVE_FOLDER_ID: settings['アーカイブ済みフォルダID'],
       EXECUTION_TIME_LIMIT_SECONDS: 300,
       FILE_LIST_SHEET: 'ファイルリスト',
