@@ -6,9 +6,20 @@
 function initializeEnvironment() {
   loadConfig_();
   console.log('環境の初期化を確認・実行します...');
+  // 領収書用シート
   createSheetWithHeaders(CONFIG.FILE_LIST_SHEET, CONFIG.HEADERS.FILE_LIST);
   createSheetWithHeaders(CONFIG.OCR_RESULT_SHEET, CONFIG.HEADERS.OCR_RESULT, true);
   createSheetWithHeaders(CONFIG.EXPORTED_SHEET, CONFIG.HEADERS.EXPORTED, true);
+  
+  // 通帳用シート
+  createSheetWithHeaders(CONFIG.PASSBOOK_FILE_LIST_SHEET, CONFIG.HEADERS.PASSBOOK_FILE_LIST);
+  createSheetWithHeaders(CONFIG.PASSBOOK_RESULT_SHEET, CONFIG.HEADERS.PASSBOOK_RESULT, true);
+  createSheetWithHeaders(CONFIG.PASSBOOK_EXPORTED_SHEET, CONFIG.HEADERS.PASSBOOK_EXPORTED, true);
+  
+  // 通帳マスターシート
+  createSheetWithHeaders(CONFIG.PASSBOOK_MASTER_SHEET, CONFIG.HEADERS.PASSBOOK_MASTER);
+
+  // 共通シート
   createSheetWithHeaders(CONFIG.TOKEN_LOG_SHEET, CONFIG.HEADERS.TOKEN_LOG);
   createSheetWithHeaders(CONFIG.LEARNING_SHEET, CONFIG.HEADERS.LEARNING);
   createSheetWithHeaders(CONFIG.MASTER_SHEET, []); 
@@ -18,7 +29,6 @@ function initializeEnvironment() {
 }
 
 function createTimeBasedTrigger_() {
-  const functionName = 'mainProcess';
   const ui = SpreadsheetApp.getUi();
   
   try {
@@ -26,12 +36,17 @@ function createTimeBasedTrigger_() {
     triggers.forEach(trigger => ScriptApp.deleteTrigger(trigger));
     console.log(`既存のトリガーを ${triggers.length} 件削除しました。`);
 
-    ScriptApp.newTrigger(functionName)
+    ScriptApp.newTrigger('mainProcess')
       .timeBased()
       .everyMinutes(15)
       .create();
     
-    ui.alert('設定完了', `「${functionName}」を15分ごとに自動実行する設定が完了しました。`, ui.ButtonSet.OK);
+    ScriptApp.newTrigger('mainProcessPassbooks')
+      .timeBased()
+      .everyMinutes(15)
+      .create();
+    
+    ui.alert('設定完了', '「領収書処理」と「通帳処理」をそれぞれ15分ごとに自動実行する設定が完了しました。', ui.ButtonSet.OK);
   
   } catch (e) {
     logError_('createTimeBasedTrigger_', e);
