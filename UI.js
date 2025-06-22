@@ -163,28 +163,121 @@ function exportPassbookForYayoi() {
 }
 
 function moveTransactionsBackToOcr() {
-  // 実装は後続のタスク
+  loadConfig_();
+  const ui = SpreadsheetApp.getUi();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.EXPORTED_SHEET);
+
+  if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.EXPORTED_SHEET) {
+    showError(`この機能は「${CONFIG.EXPORTED_SHEET}」シートでのみ使用できます。`);
+    return;
+  }
+
+  const range = sheet.getActiveRange();
+  if (range.getRow() <= 1) {
+    showError('ヘッダー行は戻せません。データ行を選択してください。');
+    return;
+  }
+
+  const response = ui.alert('取引の差し戻し', `選択中の ${range.getNumRows()} 件の取引を「${CONFIG.OCR_RESULT_SHEET}」シートに戻しますか？`, ui.ButtonSet.OK_CANCEL);
+  if (response !== ui.Button.OK) return;
+
+  try {
+    const ocrSheet = getSheet(CONFIG.OCR_RESULT_SHEET);
+    const fullRange = sheet.getRange(range.getRow(), 1, range.getNumRows(), sheet.getLastColumn());
+    const valuesToRestore = fullRange.getValues();
+    const formulasToRestore = fullRange.getFormulas();
+
+    const headersOcr = CONFIG.HEADERS.OCR_RESULT;
+    const linkColIndex = headersOcr.indexOf('ファイルへのリンク');
+
+    const originalData = valuesToRestore.map((row, rowIndex) => {
+        const originalRow = row.slice(0, headersOcr.length);
+        if (linkColIndex !== -1) {
+            originalRow[linkColIndex] = formulasToRestore[rowIndex][linkColIndex] || originalRow[linkColIndex];
+        }
+        return originalRow;
+    });
+
+    const destinationRange = ocrSheet.getRange(ocrSheet.getLastRow() + 1, 1, originalData.length, originalData[0].length);
+    destinationRange.setValues(originalData);
+
+    const learnCheckCol = headersOcr.indexOf('学習チェック') + 1;
+    if (learnCheckCol > 0) {
+      const checkRange = ocrSheet.getRange(destinationRange.getRow(), learnCheckCol, destinationRange.getNumRows(), 1);
+      const checkValues = valuesToRestore.map(row => [row[learnCheckCol - 1]]);
+      checkRange.insertCheckboxes().setValues(checkValues);
+    }
+
+    sheet.deleteRows(range.getRow(), range.getNumRows());
+    ui.alert('差し戻し完了', `${range.getNumRows()} 件の取引を「${CONFIG.OCR_RESULT_SHEET}」シートに戻しました。`, ui.ButtonSet.OK);
+
+  } catch (e) {
+    logError_('moveTransactionsBackToOcr', e);
+    showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
+  }
 }
 
+// ▼▼▼【修正箇所】通帳の差し戻し機能を実装 ▼▼▼
 function movePassbookTransactionsBackToOcr() {
-  // 実装は後続のタスク
-}
+  loadConfig_();
+  const ui = SpreadsheetApp.getUi();
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.PASSBOOK_EXPORTED_SHEET);
 
-function showReceiptPreview() {
-  // 実装は後続のタスク
-}
+  if (SpreadsheetApp.getActiveSheet().getName() !== CONFIG.PASSBOOK_EXPORTED_SHEET) {
+    showError(`この機能は「${CONFIG.PASSBOOK_EXPORTED_SHEET}」シートでのみ使用できます。`);
+    return;
+  }
 
-function showPassbookPreview() {
-  // 実装は後続のタスク
-}
+  const range = sheet.getActiveRange();
+  if (range.getRow() <= 1) {
+    showError('ヘッダー行は戻せません。データ行を選択してください。');
+    return;
+  }
 
-function deleteSelectedTransactions() {
-  // 実装は後続のタスク
-}
+  const response = ui.alert('取引の差し戻し (通帳)', `選択中の ${range.getNumRows()} 件の取引を「${CONFIG.PASSBOOK_RESULT_SHEET}」シートに戻しますか？`, ui.ButtonSet.OK_CANCEL);
+  if (response !== ui.Button.OK) return;
 
-function insertDummyInvoiceNumber() {
-  // 実装は後続のタスク
+  try {
+    const ocrSheet = getSheet(CONFIG.PASSBOOK_RESULT_SHEET);
+    const fullRange = sheet.getRange(range.getRow(), 1, range.getNumRows(), sheet.getLastColumn());
+    const valuesToRestore = fullRange.getValues();
+    const formulasToRestore = fullRange.getFormulas();
+
+    const headersOcr = CONFIG.HEADERS.PASSBOOK_RESULT;
+    const linkColIndex = headersOcr.indexOf('ファイルへのリンク');
+
+    const originalData = valuesToRestore.map((row, rowIndex) => {
+        const originalRow = row.slice(0, headersOcr.length);
+        if (linkColIndex !== -1) {
+            originalRow[linkColIndex] = formulasToRestore[rowIndex][linkColIndex] || originalRow[linkColIndex];
+        }
+        return originalRow;
+    });
+
+    const destinationRange = ocrSheet.getRange(ocrSheet.getLastRow() + 1, 1, originalData.length, originalData[0].length);
+    destinationRange.setValues(originalData);
+
+    const learnCheckCol = headersOcr.indexOf('学習チェック') + 1;
+    if (learnCheckCol > 0) {
+      const checkRange = ocrSheet.getRange(destinationRange.getRow(), learnCheckCol, destinationRange.getNumRows(), 1);
+      const checkValues = valuesToRestore.map(row => [row[learnCheckCol - 1]]);
+      checkRange.insertCheckboxes().setValues(checkValues);
+    }
+
+    sheet.deleteRows(range.getRow(), range.getNumRows());
+    ui.alert('差し戻し完了', `${range.getNumRows()} 件の取引を「${CONFIG.PASSBOOK_RESULT_SHEET}」シートに戻しました。`, ui.ButtonSet.OK);
+
+  } catch (e) {
+    logError_('movePassbookTransactionsBackToOcr', e);
+    showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
+  }
 }
+// ▲▲▲ 修正箇所 ▲▲▲
+
+function showReceiptPreview() { /* 実装は後続のタスク */ }
+function showPassbookPreview() { /* 実装は後続のタスク */ }
+function deleteSelectedTransactions() { /* 実装は後続のタスク */ }
+function insertDummyInvoiceNumber() { /* 実装は後続のタスク */ }
 
 function activateFilter() {
   const sheet = SpreadsheetApp.getActiveSheet();
