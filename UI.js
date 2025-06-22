@@ -108,25 +108,32 @@ function exportPassbookForYayoi() {
             csvRow[3]  = Utilities.formatDate(new Date(row[COL['取引日']]), 'JST', 'yyyy/MM/dd');
             
             if (isDeposit) {
+                const taxAmount = calculateTaxAmount_(row[COL['入金額']], row[COL['貸方税区分']]);
                 csvRow[4]  = passbookAccountName;
                 csvRow[7]  = '対象外';
                 csvRow[8]  = row[COL['入金額']];
+                csvRow[9]  = 0;
                 csvRow[10] = row[COL['相手方勘定科目']];
                 csvRow[11] = row[COL['相手方補助科目']];
                 csvRow[13] = row[COL['貸方税区分']];
                 csvRow[14] = row[COL['入金額']];
+                csvRow[15] = taxAmount;
             } else {
+                const taxAmount = calculateTaxAmount_(row[COL['出金額']], row[COL['借方税区分']]);
                 csvRow[4]  = row[COL['相手方勘定科目']];
                 csvRow[5]  = row[COL['相手方補助科目']];
                 csvRow[7]  = row[COL['借方税区分']];
                 csvRow[8]  = row[COL['出金額']];
+                csvRow[9]  = taxAmount;
                 csvRow[10] = passbookAccountName;
                 csvRow[13] = '対象外';
                 csvRow[14] = row[COL['出金額']];
+                csvRow[15] = 0;
             }
             
             csvRow[16] = row[COL['摘要']];
-            csvRow[9] = 0; csvRow[15] = 0; csvRow[19] = CONFIG.YAYOI.TORIHIKI_TYPE; csvRow[24] = CONFIG.YAYOI.CHOUSEI;
+            csvRow[19] = CONFIG.YAYOI.TORIHIKI_TYPE;
+            csvRow[24] = CONFIG.YAYOI.CHOUSEI;
             return csvRow;
         });
 

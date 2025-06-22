@@ -3,6 +3,21 @@
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
+function calculateTaxAmount_(amount, taxCategory) {
+  if (!amount || !taxCategory) return 0;
+  
+  const taxStr = taxCategory.toString();
+  if (taxStr.includes('対象外') || taxStr.includes('不課税') || taxStr.includes('非課税売上')) {
+    return 0;
+  }
+  
+  if (taxStr.includes('軽減8%')) {
+    return Math.floor(amount * 8 / 108);
+  }
+  
+  return Math.floor(amount * 10 / 110);
+}
+
 function logError_(functionName, error, contextInfo = '') {
     try {
         if (!CONFIG) return;
@@ -28,10 +43,8 @@ function handleLearningCheck(sheet, row, col, headers) {
       
       const taxCategory = dataRow[COL['消費税課税区分コード']];
 
-      // 領収書ルールの場合、通帳勘定科目列は空にする
       getSheet(CONFIG.LEARNING_SHEET).appendRow([
-        dataRow[COL['店名']], dataRow[COL['摘要']], '', // 通帳勘定科目は空
-        '', '', 
+        dataRow[COL['店名']], dataRow[COL['摘要']], '', '', '', 
         dataRow[COL['勘定科目']], dataRow[COL['補助科目']], taxCategory,
         '', new Date(), transactionId
       ]);
@@ -65,10 +78,8 @@ function handlePassbookLearningCheck(sheet, row, col, headers) {
       const taxCategory = isDeposit ? dataRow[COL['貸方税区分']] : dataRow[COL['借方税区分']];
       const passbookAccountName = dataRow[COL['通帳勘定科目']];
       
-      // 通帳ルールの場合、店名は空にする
       getSheet(CONFIG.LEARNING_SHEET).appendRow([
-        '', dataRow[COL['摘要']], passbookAccountName, // 通帳勘定科目を記録
-        '', '',
+        '', dataRow[COL['摘要']], passbookAccountName, '', '',
         dataRow[COL['相手方勘定科目']], dataRow[COL['相手方補助科目']], taxCategory,
         '', new Date(), transactionId
       ]);
@@ -117,7 +128,7 @@ function logOcrResult(receipts, originalFileId) {
       let finalDescription = r.description || '';
 
       for (const rule of learningRules) {
-        if (!rule.storeName) continue; // 領収書ルールのみを対象
+        if (!rule.storeName) continue;
         const ocrData = { storeName: normalizeStoreName(r.storeName), description: r.description || '', amount: Number(r.amount) || 0 };
         const storeMatch = ocrData.storeName.includes(rule.storeName) || rule.storeName.includes(ocrData.storeName);
         const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
@@ -223,7 +234,7 @@ function getLearningData() {
         rawStoreName: row[COL['店名']] || '',
         storeName: normalizeStoreName(row[COL['店名']] || ''),
         descriptionKeyword: row[COL['摘要（キーワード）']] || '',
-        passbookAccountName: row[COL['通帳勘定科目']] || '', // 通帳勘定科目を読み込む
+        passbookAccountName: row[COL['通帳勘定科目']] || '',
         amountCondition: row[COL['金額条件']] || '',
         amountValue: (amountValue !== '' && !isNaN(amountValue)) ? Number(amountValue) : null,
         kanjo: row[COL['勘定科目']],
@@ -365,7 +376,7 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
       let inferred = {};
 
       for (const rule of learningRules) {
-        if (rule.storeName !== '') continue; // 通帳ルールのみ対象 (店名が空)
+        if (rule.storeName !== '') continue;
         
         const keywordMatch = !rule.descriptionKeyword || (tx.取引内容 || '').includes(rule.descriptionKeyword);
         const passbookMatch = !rule.passbookAccountName || rule.passbookAccountName === passbookAccountName;
