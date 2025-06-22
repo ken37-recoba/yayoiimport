@@ -20,29 +20,69 @@ function handleLearningCheck(sheet, row, col, headers) {
   const transactionId = sheet.getRange(row, headers.indexOf('取引ID') + 1).getValue();
   if (!transactionId) return;
 
-  const contextInfo = `Transaction ID: ${transactionId}, Cell: ${range.getA1Notation()}`;
   try {
     if (range.isChecked()) {
       if (range.getNote().includes('学習済み')) return;
       const dataRow = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
-      const storeName = dataRow[headers.indexOf('店名')];
-      const description = dataRow[headers.indexOf('摘要')];
-      const kanjo = dataRow[headers.indexOf('勘定科目')];
-      const hojo = dataRow[headers.indexOf('補助科目')];
-      getSheet(CONFIG.LEARNING_SHEET).appendRow([ storeName, description, '', '', kanjo, hojo, '', new Date(), transactionId ]);
+      const COL = headers.reduce((acc, h, i) => ({...acc, [h]: i}), {});
+      
+      const taxCategory = dataRow[COL['消費税課税区分コード']];
+
+      // 領収書ルールの場合、通帳勘定科目列は空にする
+      getSheet(CONFIG.LEARNING_SHEET).appendRow([
+        dataRow[COL['店名']], dataRow[COL['摘要']], '', // 通帳勘定科目は空
+        '', '', 
+        dataRow[COL['勘定科目']], dataRow[COL['補助科目']], taxCategory,
+        '', new Date(), transactionId
+      ]);
       range.setNote(`学習済み (ID: ${transactionId})`);
       sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground('#e6f4ea');
-      SpreadsheetApp.getActiveSpreadsheet().toast(`「${storeName}」のルールを作成しました。`);
     } else {
       const deletedCount = deleteLearningDataByIds([transactionId]);
       if (deletedCount > 0) {
         range.clearNote();
         sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground(null);
-        SpreadsheetApp.getActiveSpreadsheet().toast(`取引ID ${transactionId} の学習データを取り消しました。`);
       }
     }
   } catch (e) {
-    logError_('handleLearningCheck', e, contextInfo);
+    logError_('handleLearningCheck', e);
+  }
+}
+
+function handlePassbookLearningCheck(sheet, row, col, headers) {
+  loadConfig_();
+  const range = sheet.getRange(row, col);
+  const transactionId = sheet.getRange(row, headers.indexOf('取引ID') + 1).getValue();
+  if (!transactionId) return;
+
+  try {
+    if (range.isChecked()) {
+      if (range.getNote().includes('学習済み')) return;
+      const dataRow = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
+      const COL = headers.reduce((acc, h, i) => ({...acc, [h]: i}), {});
+
+      const isDeposit = Number(dataRow[COL['入金額']]) > 0;
+      const taxCategory = isDeposit ? dataRow[COL['貸方税区分']] : dataRow[COL['借方税区分']];
+      const passbookAccountName = dataRow[COL['通帳勘定科目']];
+      
+      // 通帳ルールの場合、店名は空にする
+      getSheet(CONFIG.LEARNING_SHEET).appendRow([
+        '', dataRow[COL['摘要']], passbookAccountName, // 通帳勘定科目を記録
+        '', '',
+        dataRow[COL['相手方勘定科目']], dataRow[COL['相手方補助科目']], taxCategory,
+        '', new Date(), transactionId
+      ]);
+      range.setNote(`学習済み (ID: ${transactionId})`);
+      sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground('#e6f4ea');
+    } else {
+      const deletedCount = deleteLearningDataByIds([transactionId]);
+       if (deletedCount > 0) {
+        range.clearNote();
+        sheet.getRange(row, 1, 1, sheet.getLastColumn()).setBackground(null);
+      }
+    }
+  } catch (e) {
+    logError_('handlePassbookLearningCheck', e);
   }
 }
 
@@ -77,8 +117,9 @@ function logOcrResult(receipts, originalFileId) {
       let finalDescription = r.description || '';
 
       for (const rule of learningRules) {
+        if (!rule.storeName) continue; // 領収書ルールのみを対象
         const ocrData = { storeName: normalizeStoreName(r.storeName), description: r.description || '', amount: Number(r.amount) || 0 };
-        const storeMatch = !rule.storeName || ocrData.storeName.includes(rule.storeName) || rule.storeName.includes(ocrData.storeName);
+        const storeMatch = ocrData.storeName.includes(rule.storeName) || rule.storeName.includes(ocrData.storeName);
         const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
         let amountMatch = true;
         if (rule.amountCondition && rule.amountValue !== null) {
@@ -182,10 +223,12 @@ function getLearningData() {
         rawStoreName: row[COL['店名']] || '',
         storeName: normalizeStoreName(row[COL['店名']] || ''),
         descriptionKeyword: row[COL['摘要（キーワード）']] || '',
+        passbookAccountName: row[COL['通帳勘定科目']] || '', // 通帳勘定科目を読み込む
         amountCondition: row[COL['金額条件']] || '',
         amountValue: (amountValue !== '' && !isNaN(amountValue)) ? Number(amountValue) : null,
         kanjo: row[COL['勘定科目']],
         hojo: row[COL['補助科目']] || '',
+        taxCategory: row[COL['税区分']] || '対象外',
         descriptionTemplate: row[COL['摘要のテンプレート']] || '',
       });
     }
@@ -248,7 +291,10 @@ function createSheetWithHeaders(sheetName, headers, activateFilterFlag = false) 
     sheet = ss.insertSheet(sheetName);
   }
   if (headers && headers.length > 0) {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    const currentHeaders = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+    if (JSON.stringify(currentHeaders) !== JSON.stringify(headers)) {
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    }
   }
   sheet.setFrozenRows(1);
   if (activateFilterFlag) {
@@ -301,6 +347,7 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
     const originalFile = DriveApp.getFileById(originalFileId);
     
     const passbookMaster = getPassbookMasterData();
+    const learningRules = getLearningData();
     const fileNameLower = originalFileName.toLowerCase();
     let passbookAccountName = '（未設定）';
     for (const master of passbookMaster) {
@@ -310,9 +357,34 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
       }
     }
 
-    let verifiedTransactions = verifyAndCorrectPassbookBalances(transactions);
+    const filteredTransactions = transactions.filter(tx => !((tx.取引内容 || '').includes('繰越') && (Number(tx.入金額) || 0) === 0 && (Number(tx.出金額) || 0) === 0));
+    let verifiedTransactions = verifyAndCorrectPassbookBalances(filteredTransactions);
+
     const newRows = verifiedTransactions.map(tx => {
-      const inferred = inferPassbookAccountTitle(tx.取引内容);
+      let isLearned = false;
+      let inferred = {};
+
+      for (const rule of learningRules) {
+        if (rule.storeName !== '') continue; // 通帳ルールのみ対象 (店名が空)
+        
+        const keywordMatch = !rule.descriptionKeyword || (tx.取引内容 || '').includes(rule.descriptionKeyword);
+        const passbookMatch = !rule.passbookAccountName || rule.passbookAccountName === passbookAccountName;
+
+        if (keywordMatch && passbookMatch) {
+          inferred = {
+            accountTitle: rule.kanjo,
+            subAccount: rule.hojo,
+            taxCategory: rule.taxCategory
+          };
+          isLearned = true;
+          break;
+        }
+      }
+
+      if (!isLearned) {
+        inferred = inferPassbookAccountTitle(tx.取引内容);
+      }
+      
       const isDeposit = Number(tx.入金額) > 0;
       let debitTaxCategory = '対象外', creditTaxCategory = '対象外';
       if (isDeposit) creditTaxCategory = inferred.taxCategory;
@@ -321,15 +393,19 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
       return [
         Utilities.getUuid(), new Date(), tx.取引日, tx.取引内容,
         tx.入金額, tx.出金額, tx.残高,
-        passbookAccountName,
-        inferred.accountTitle, inferred.subAccount,
+        passbookAccountName, inferred.accountTitle, inferred.subAccount,
         debitTaxCategory, creditTaxCategory,
         `=HYPERLINK("${originalFile.getUrl()}","${originalFileName}")`, tx.備考 || ''
       ];
     });
 
     if (newRows.length > 0) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+      const startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, newRows.length, newRows[0].length).setValues(newRows);
+      const learnCheckCol = CONFIG.HEADERS.PASSBOOK_RESULT.indexOf('学習チェック') + 1;
+      if (learnCheckCol > 0) {
+        sheet.getRange(startRow, learnCheckCol, newRows.length).insertCheckboxes();
+      }
     }
   } catch (e) {
     logError_('logPassbookResult', e, contextInfo);

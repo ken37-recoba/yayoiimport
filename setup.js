@@ -6,23 +6,20 @@
 function initializeEnvironment() {
   loadConfig_();
   console.log('環境の初期化を確認・実行します...');
-  // 領収書用シート
+  
   createSheetWithHeaders(CONFIG.FILE_LIST_SHEET, CONFIG.HEADERS.FILE_LIST);
   createSheetWithHeaders(CONFIG.OCR_RESULT_SHEET, CONFIG.HEADERS.OCR_RESULT, true);
   createSheetWithHeaders(CONFIG.EXPORTED_SHEET, CONFIG.HEADERS.EXPORTED, true);
   
-  // 通帳用シート
   createSheetWithHeaders(CONFIG.PASSBOOK_FILE_LIST_SHEET, CONFIG.HEADERS.PASSBOOK_FILE_LIST);
   createSheetWithHeaders(CONFIG.PASSBOOK_RESULT_SHEET, CONFIG.HEADERS.PASSBOOK_RESULT, true);
   createSheetWithHeaders(CONFIG.PASSBOOK_EXPORTED_SHEET, CONFIG.HEADERS.PASSBOOK_EXPORTED, true);
   
-  // 通帳マスターシート
   createSheetWithHeaders(CONFIG.PASSBOOK_MASTER_SHEET, CONFIG.HEADERS.PASSBOOK_MASTER);
-
-  // 共通シート
-  createSheetWithHeaders(CONFIG.TOKEN_LOG_SHEET, CONFIG.HEADERS.TOKEN_LOG);
   createSheetWithHeaders(CONFIG.LEARNING_SHEET, CONFIG.HEADERS.LEARNING);
-  createSheetWithHeaders(CONFIG.MASTER_SHEET, []); 
+  
+  createSheetWithHeaders(CONFIG.TOKEN_LOG_SHEET, CONFIG.HEADERS.TOKEN_LOG);
+  createSheetWithHeaders(CONFIG.MASTER_SHEET, ['勘定科目', 'キーワード/ルール']); 
   createSheetWithHeaders(CONFIG.CONFIG_SHEET, []); 
   createSheetWithHeaders(CONFIG.ERROR_LOG_SHEET, CONFIG.HEADERS.ERROR_LOG);
   console.log('環境の初期化が完了しました。');
@@ -50,7 +47,6 @@ function createTimeBasedTrigger_() {
   
   } catch (e) {
     logError_('createTimeBasedTrigger_', e);
-    console.error('トリガーの作成に失敗しました: ' + e.toString());
     ui.alert('トリガーの作成に失敗しました。\n\nスクリプトの実行権限を許可する必要があるかもしれません。\n詳細: ' + e.message);
   }
 }

@@ -4,9 +4,9 @@
 // =================================================================================
 
 /**************************************************************************************************
- * * 領収書・通帳OCRシステム (v6.1 Passbook Master Support)
+ * * 領収書・通帳OCRシステム (v7.1 Passbook Composite Learning)
  * * 概要:
- * - 複数通帳に対応するため、「通帳マスター」シートを導入。
+ * - 通帳の学習機能に「通帳勘定科目」を条件として追加。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -19,19 +19,15 @@ const STATUS = {
   ERROR: 'エラー',
 };
 
-// ハイライト用の背景色
-const DUPLICATE_HIGHLIGHT_COLOR = '#fff799'; // 明るい黄色
-const CRITICAL_ERROR_HIGHLIGHT_COLOR = '#ffcccc'; // 明るい赤色
+const DUPLICATE_HIGHLIGHT_COLOR = '#fff799';
+const CRITICAL_ERROR_HIGHLIGHT_COLOR = '#ffcccc';
 
-/**
- * スクリプト実行時に最初に呼び出され、設定を読み込む
- */
 function loadConfig_() {
   if (CONFIG) return;
   
   try {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('設定');
-    if (!sheet) throw new Error('「設定」シートが見つかりません。初回設定が完了していない可能性があります。');
+    if (!sheet) throw new Error('「設定」シートが見つかりません。');
     
     const data = sheet.getRange('A2:B6').getValues();
     const settings = data.reduce((obj, row) => {
@@ -41,24 +37,19 @@ function loadConfig_() {
 
     CONFIG = {
       SPREADSHEET_ID: SpreadsheetApp.getActiveSpreadsheet().getId(),
-      // --- 領収書関連 ---
       SOURCE_FOLDER_ID: settings['領収書データ化フォルダID'],
-      EXPORT_FOLDER_ID: settings['クライアントフォルダID'],
       ARCHIVE_FOLDER_ID: settings['アーカイブ済みフォルダID'],
-      // --- 通帳関連 ---
       PASSBOOK_SOURCE_FOLDER_ID: settings['通帳データ化フォルダID'],
       PASSBOOK_ARCHIVE_FOLDER_ID: settings['通帳アーカイブ済みフォルダID'],
-      
-      // --- 共通設定 ---
+      YAYOI_EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
       EXECUTION_TIME_LIMIT_SECONDS: 300,
       MASTER_SHEET: '勘定科目マスター',
       LEARNING_SHEET: '学習データ',
       CONFIG_SHEET: '設定',
       ERROR_LOG_SHEET: 'エラーログ',
-      GEMINI_MODEL: 'gemini-1.5-flash-preview-0520',
+      GEMINI_MODEL: 'gemini-2.5-flash-preview-05-20',
       THINKING_BUDGET: 10000,
       
-      // --- シート名 ---
       FILE_LIST_SHEET: 'ファイルリスト',
       OCR_RESULT_SHEET: 'OCR結果',
       EXPORTED_SHEET: '出力済み',
@@ -68,7 +59,6 @@ function loadConfig_() {
       PASSBOOK_EXPORTED_SHEET: '通帳出力済み',
       PASSBOOK_MASTER_SHEET: '通帳マスター',
       
-      // --- 弥生会計用設定 ---
       YAYOI: {
         SHIKIBETSU_FLAG: '2000',
         KASHIKATA_KAMOKU: '役員借入金',
@@ -83,7 +73,6 @@ function loadConfig_() {
           '生成元', '仕訳メモ', '付箋1', '付箋2', '調整'
         ],
       },
-      // --- ヘッダー定義 ---
       HEADERS: {
         FILE_LIST: ['ファイルID', 'ファイル名', 'ステータス', 'エラー詳細', '登録日時'],
         OCR_RESULT: [
@@ -92,13 +81,14 @@ function loadConfig_() {
           '消費税課税区分コード', 'ファイルへのリンク', '備考', '学習チェック'
         ],
         TOKEN_LOG: ['日時', 'ファイル名', '入力トークン', '思考トークン', '出力トークン', '合計トークン'],
-        LEARNING: ['店名', '摘要（キーワード）', '金額条件', '金額', '勘定科目', '補助科目', '摘要のテンプレート', '学習登録日時', '取引ID'],
+        // ▼▼▼【学習機能】「通帳勘定科目」列を追加 ▼▼▼
+        LEARNING: ['店名', '摘要（キーワード）', '通帳勘定科目', '金額条件', '金額', '勘定科目', '補助科目', '税区分', '摘要のテンプレート', '学習登録日時', '取引ID'],
         ERROR_LOG: ['日時', '関数名', 'エラーメッセージ', '関連情報', 'スタックトレース'],
         PASSBOOK_FILE_LIST: ['ファイルID', 'ファイル名', '銀行タイプ', 'ステータス', 'エラー詳細', '登録日時'],
         PASSBOOK_RESULT: [
             '取引ID', '処理日時', '取引日', '摘要', '入金額', '出金額', '残高',
             '通帳勘定科目', '相手方勘定科目', '相手方補助科目',
-            '借方税区分', '貸方税区分', 'ファイルへのリンク', '備考'
+            '借方税区分', '貸方税区分', 'ファイルへのリンク', '備考', '学習チェック'
         ],
         PASSBOOK_MASTER: ['ファイル名キーワード', '弥生会計で使う勘定科目名']
       },
@@ -120,9 +110,6 @@ function loadConfig_() {
   }
 }
 
-/**************************************************************************************************
- * 2. セットアップ & メインプロセス (Setup & Main Process)
- **************************************************************************************************/
 function onOpen() {
   try {
     loadConfig_();
@@ -145,13 +132,14 @@ function onOpen() {
     const checkMenu = SpreadsheetApp.getUi().createMenu('チェックと修正');
     checkMenu.addItem('重複の可能性をチェック (領収書)', 'highlightDuplicates_');
     checkMenu.addItem('重大なエラーをチェック (領収書)', 'highlightCriticalErrors_');
-    checkMenu.addItem('選択行のハイライトを解除 (領収書)', 'removeHighlight_');
+    checkMenu.addItem('重大なエラーをチェック (通帳)', 'highlightPassbookCriticalErrors_');
+    checkMenu.addSeparator();
+    checkMenu.addItem('選択行のハイライトを解除', 'removeHighlight_');
     checkMenu.addSeparator();
     checkMenu.addItem('選択した取引を削除', 'deleteSelectedTransactions');
     menu.addSubMenu(checkMenu);
 
     menu.addSeparator();
-    
     const settingsMenu = SpreadsheetApp.getUi().createMenu('その他・設定');
     settingsMenu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
     settingsMenu.addItem('フィルタをオンにする (現在のシート)', 'activateFilter');
@@ -163,7 +151,6 @@ function onOpen() {
     menu.addToUi();
   } catch (e) {
     logError_('onOpen', e);
-    showError('スクリプトの起動中にエラーが発生しました。\n\n「設定」シートが正しく構成されているか確認してください。\n\n詳細: ' + e.message, '起動エラー');
   }
 }
 
@@ -187,9 +174,16 @@ function onEdit(e) {
         handleTaxCodeRemoval(sheet, row, headers);
       }
     }
+
+    if (sheetName === CONFIG.PASSBOOK_RESULT_SHEET && row > 1) {
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+      const learnCheckColIndex = headers.indexOf('学習チェック') + 1;
+      if (col === learnCheckColIndex) {
+        handlePassbookLearningCheck(sheet, row, col, headers);
+      }
+    }
   } catch (err) {
     logError_('onEdit', err);
-    console.error("onEdit Error: " + err.toString());
   }
 }
 
@@ -202,19 +196,16 @@ function mainProcess() {
   try {
     loadConfig_();
     const startTime = new Date();
-    console.log('領収書処理のメインプロセスを開始します。');
     initializeEnvironment();
     processNewFiles();
+    SpreadsheetApp.flush();
     performOcrOnPendingFiles(startTime);
     highlightCriticalErrors_();
     highlightDuplicates_();
-    console.log('領収書処理のメインプロセスが完了しました。');
   } catch (e) {
     logError_('mainProcess', e);
-    showErrorSafe_('領収書処理中にエラーが発生しました。', e);
   } finally {
     lock.releaseLock();
-    console.log('領収書処理：ロックを解放しました。');
   }
 }
 
@@ -227,25 +218,14 @@ function mainProcessPassbooks() {
   try {
     loadConfig_();
     const startTime = new Date();
-    console.log('通帳処理のメインプロセスを開始します。');
     initializeEnvironment();
     processNewPassbookFiles();
+    SpreadsheetApp.flush();
     performOcrOnPassbookFiles(startTime);
-    console.log('通帳処理のメインプロセスが完了しました。');
+    highlightPassbookCriticalErrors_();
   } catch (e) {
     logError_('mainProcessPassbooks', e);
-    showErrorSafe_('通帳処理中にエラーが発生しました。', e);
   } finally {
     lock.releaseLock();
-    console.log('通帳処理：ロックを解放しました。');
   }
-}
-
-function showErrorSafe_(message, error) {
-    console.error(`${message}: ${error.toString()}`);
-    try {
-        SpreadsheetApp.getActiveSpreadsheet().toast(`${message} 詳細はログを確認してください。`, 'エラー', 10);
-    } catch (uiError) {
-        console.error("UIの表示にも失敗しました。トリガー実行中の可能性があります。");
-    }
 }
