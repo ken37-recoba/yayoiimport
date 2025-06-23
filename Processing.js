@@ -3,9 +3,6 @@
 // 役割: ファイルの検出やOCR処理など、中核となるバックグラウンド処理を管理します。
 // =================================================================================
 
-/**
- * 新規の領収書ファイルを検出しリストに追加する
- */
 function processNewFiles() {
   loadConfig_();
   console.log('ステップ1: 新規の領収書ファイルを処理...');
@@ -39,9 +36,6 @@ function processNewFiles() {
   }
 }
 
-/**
- * 処理待ちの領収書ファイルに対してOCR処理を実行する
- */
 function performOcrOnPendingFiles(startTime) {
   loadConfig_();
   console.log('ステップ2: 領収書のOCR処理を開始...');
@@ -107,10 +101,6 @@ function performOcrOnPendingFiles(startTime) {
   console.log('ステップ2: 領収書のOCR処理が完了。');
 }
 
-
-/**
- * 新規の通帳ファイルを検出しリストに追加する
- */
 function processNewPassbookFiles() {
   loadConfig_();
   console.log('ステップ1: 新規の通帳ファイルを処理...');
@@ -135,7 +125,7 @@ function processNewPassbookFiles() {
       if (mimeType.startsWith('image/')) {
         const fileName = file.getName().toUpperCase();
         let bankType = 'STANDARD';
-        if (fileName.includes('MUFG')) bankType = 'MUFG';
+        if (fileName.includes('UFJ')) bankType = 'MUFG';
         if (fileName.includes('OSAKA_SHINKIN')) bankType = 'OSAKA_SHINKIN';
         
         fileListSheet.appendRow([fileId, file.getName(), bankType, STATUS.PENDING, '', new Date()]);
@@ -149,9 +139,6 @@ function processNewPassbookFiles() {
   }
 }
 
-/**
- * 処理待ちの通帳ファイルに対してOCR処理を実行する
- */
 function performOcrOnPassbookFiles(startTime) {
   loadConfig_();
   console.log('ステップ2: 通帳のOCR処理を開始...');
@@ -188,9 +175,13 @@ function performOcrOnPassbookFiles(startTime) {
         if (result.success) {
           const ocrData = JSON.parse(result.data);
           if (ocrData && ocrData.length > 0) {
-            logPassbookResult(ocrData, fileId, fileName);
+            const passbookAccountName = logPassbookResult(ocrData, fileId, fileName);
             logTokenUsage(fileName, result.usage);
             
+            const newFileName = generateNewPassbookFileName_(passbookAccountName, fileName);
+            file.setName(newFileName);
+            console.log(`ファイル名を変更しました: ${newFileName}`);
+
             fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.PROCESSED, '']]);
             file.moveTo(archiveFolder);
             console.log(`通帳OCR処理成功: ${fileName}`);

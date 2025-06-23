@@ -3,20 +3,13 @@
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
-/**
- * テキストを正規化する（半角カナ→全角カナ、全角英数→半角英数、記号を全角化など）
- * @param {string} text - 正規化する文字列
- * @returns {string} 正規化された文字列
- */
 function normalizeText_(text) {
   if (!text || typeof text !== 'string') return '';
   
   let result = text;
 
-  // 全角英数字を半角に変換
   result = result.replace(/[Ａ-Ｚａ-ｚ０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
 
-  // 半角カタカナを全角カタカナに変換（濁点・半濁点も考慮）
   const hankakuKatakana = {
     'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ',
     'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
@@ -169,7 +162,6 @@ function handleTaxCodeRemoval(sheet, row, headers) {
   }
 }
 
-// ▼▼▼【修正箇所】領収書の店名・摘要も正規化する ▼▼▼
 function logOcrResult(receipts, originalFileId) {
   loadConfig_();
   const contextInfo = `File ID: ${originalFileId}`;
@@ -213,7 +205,6 @@ function logOcrResult(receipts, originalFileId) {
       const truncatedAmount = Math.trunc(r.amount || 0);
       const truncatedTaxAmount = Math.trunc(r.tax_amount || 0);
 
-      // シートに書き込む直前に正規化
       const normalizedStoreName = normalizeText_(finalStoreName);
       const normalizedFinalDescription = normalizeText_(finalDescription);
 
@@ -238,7 +229,6 @@ function logOcrResult(receipts, originalFileId) {
     throw e;
   }
 }
-// ▲▲▲ 修正箇所 ▲▲▲
 
 function logTokenUsage(fileName, usage) {
   loadConfig_();
@@ -394,6 +384,19 @@ function generateNewFileName_(transaction, originalFileName) {
   }
 }
 
+function generateNewPassbookFileName_(passbookAccountName, originalFileName) {
+  try {
+    const safeAccountName = (passbookAccountName || '不明な通帳').replace(/[\\/:*?"<>|]/g, '_');
+    // ▼▼▼【修正箇所】日付フォーマットを修正 ▼▼▼
+    const formattedDate = Utilities.formatDate(new Date(), "JST", "yyyyMMdd");
+    const extension = originalFileName.includes('.') ? originalFileName.split('.').pop() : 'jpg';
+    return `${safeAccountName}_${formattedDate}.${extension}`;
+  } catch (e) {
+    console.error(`新しい通帳ファイル名の生成に失敗: ${e.toString()}`);
+    return originalFileName;
+  }
+}
+
 function getPassbookMasterData() {
   loadConfig_();
   const masterData = [];
@@ -489,6 +492,7 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
         sheet.getRange(startRow, learnCheckCol, newRows.length).insertCheckboxes();
       }
     }
+    return passbookAccountName;
   } catch (e) {
     logError_('logPassbookResult', e, contextInfo);
     throw e;
