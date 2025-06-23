@@ -167,6 +167,7 @@ function getPassbookGeminiPrompt(bankType) {
 
 # 除外ルール (重要)
 - 「摘要」が「繰越」や「繰越残高」となっており、かつ「お支払金額」と「お預り金額」の両方が空欄または0の行は、実際の取引ではないため、JSONの出力に**含めないでください**。
+- 同様に、「摘要」が完全に空欄で、かつ「お支払金額」と「お預り金額」の両方が0の行も、ページ先頭の繰越残高行とみなし、JSON出力に**含めないでください**。
 
 # 特記事項ルール (重要)
 - 日付や金額の読み取りが困難な場合や、残高の計算に矛盾がある場合は、その内容を「備考」欄に「【要確認：金額不整合】」のように具体的に記載してください。
@@ -189,7 +190,12 @@ function getPassbookGeminiPrompt(bankType) {
     
     let bankSpecificInstructions = '';
     if (bankType === 'MUFG') {
-        bankSpecificInstructions = `\n# 三菱UFJ銀行の特別ルール\n- 日付は \`年-月日\` の形式です。例: \`07-428\` は令和7年4月28日です。\n- 「お支払金額」列は必ず『出金額』、「お預り金額」列は必ず『入金額』としてください。`;
+        bankSpecificInstructions = `
+# 三菱UFJ銀行の特別ルール (最優先事項)
+- **入出金の厳格なルール:** 通帳の「お支払金額」列にある数値は**絶対に『出金額』**としてください。「お預り金額」列にある数値は**絶対に『入金額』**としてください。この列の位置に基づくルールは、他のどの指示よりも優先されます。
+- **残高の扱い:** 同日内の複数取引において、2行目以降の「残高」が空欄の場合があります。その場合は**無理に数字を読み取らず、JSONの\`残高\`フィールドを\`0\`または\`null\`として出力**してください。これは意図した動作なので、この件について備考欄に【要確認】と記載する必要はありません。
+- **日付形式:** 日付は \`年-月日\` の形式です。例: \`07-428\` は令和7年4月28日です。
+`;
     } else if (bankType === 'OSAKA_SHINKIN') {
         bankSpecificInstructions = `\n# 大阪信用金庫の特別ルール\n- 「差引残高」がアスタリスク(***)のみで埋められている行は、その直前の行の「摘要」の続きです。その行の摘要を直前の行の取引内容に連結し、アスタリスクの行自体は出力しないでください。`;
     }
@@ -206,7 +212,6 @@ function inferPassbookAccountTitle(description) {
     const masterData = getMasterData();
     const masterTitleList = masterData.map(row => row[0]);
 
-    // ▼▼▼【変更箇所】プロンプトとスキーマを修正 ▼▼▼
     const prompt = `あなたは日本の経理専門家です。以下の「摘要」に最も適した「勘定科目」および「標準税区分」を推測してください。補助科目は推測せず、JSONにも含めないでください。\n\n# 摘要\n${description}\n\n# 勘定科目マスター\n${JSON.stringify(masterData)}`;
 
     const payload = {
@@ -224,7 +229,6 @@ function inferPassbookAccountTitle(description) {
         }
       }
     };
-    // ▲▲▲ 変更箇所 ▲▲▲
 
     const options = { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true };
     const response = UrlFetchApp.fetch(url, options);
@@ -234,14 +238,12 @@ function inferPassbookAccountTitle(description) {
     if (responseCode === 200) {
       const inferredText = JSON.parse(responseBody).candidates?.[0]?.content?.parts?.[0]?.text;
       if (inferredText) {
-        // ▼▼▼【変更箇所】補助科目を空で返すように修正 ▼▼▼
         const result = JSON.parse(inferredText);
         return { 
           accountTitle: result.accountTitle, 
-          subAccount: '', // 初期推測では補助科目を空にする
+          subAccount: '',
           taxCategory: result.taxCategory 
         };
-        // ▲▲▲ 変更箇所 ▲▲▲
       }
     }
     

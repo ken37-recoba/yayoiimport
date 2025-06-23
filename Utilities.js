@@ -368,8 +368,15 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
       }
     }
 
-    const filteredTransactions = transactions.filter(tx => !((tx.取引内容 || '').includes('繰越') && (Number(tx.入金額) || 0) === 0 && (Number(tx.出金額) || 0) === 0));
+    const filteredTransactions = transactions.filter(tx => {
+      const isBroughtForward = (tx.取引内容 || '').includes('繰越');
+      const isTransactionEmpty = (Number(tx.入金額) || 0) === 0 && (Number(tx.出金額) || 0) === 0;
+      const isDescriptionEmpty = !(tx.取引内容 || '').trim();
+      return !(isBroughtForward && isTransactionEmpty) && !(isDescriptionEmpty && isTransactionEmpty);
+    });
+
     let verifiedTransactions = verifyAndCorrectPassbookBalances(filteredTransactions);
+    verifiedTransactions = complementMufgBalance_(verifiedTransactions);
 
     const newRows = verifiedTransactions.map(tx => {
       let isLearned = false;
@@ -448,4 +455,24 @@ function verifyAndCorrectPassbookBalances(transactions) {
     }
   }
   return transactions;
+}
+
+function complementMufgBalance_(transactions) {
+  if (!transactions || transactions.length < 1) return transactions;
+
+  return transactions.map((tx, i, arr) => {
+    const isBalanceEmpty = !tx.残高 || Number(tx.残高) === 0;
+
+    if (i > 0 && tx.取引日 === arr[i-1].取引日 && isBalanceEmpty) {
+      const prevTx = arr[i-1];
+      const prevBalance = Number(prevTx.残高) || 0;
+      const deposit = Number(tx.入金額) || 0;
+      const withdrawal = Number(tx.出金額) || 0;
+      
+      const newBalance = prevBalance - withdrawal + deposit;
+      tx.残高 = newBalance;
+      tx.備考 = (tx.備考 || '') + '[残高印字なし]';
+    }
+    return tx;
+  });
 }
