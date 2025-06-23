@@ -3,6 +3,62 @@
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
+/**
+ * テキストを正規化する（半角カナ→全角カナ、全角英数→半角英数、記号を全角化など）
+ * @param {string} text - 正規化する文字列
+ * @returns {string} 正規化された文字列
+ */
+function normalizeText_(text) {
+  if (!text || typeof text !== 'string') return '';
+  
+  let result = text;
+
+  // 全角英数字を半角に変換
+  result = result.replace(/[Ａ-Ｚａ-ｚ０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
+
+  // 半角カタカナを全角カタカナに変換（濁点・半濁点も考慮）
+  const hankakuKatakana = {
+    'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ',
+    'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
+    'ﾀﾞ': 'ダ', 'ﾁﾞ': 'ヂ', 'ﾂﾞ': 'ヅ', 'ﾃﾞ': 'デ', 'ﾄﾞ': 'ド',
+    'ﾊﾞ': 'バ', 'ﾋﾞ': 'ビ', 'ﾌﾞ': 'ブ', 'ﾍﾞ': 'ベ', 'ﾎﾞ': 'ボ',
+    'ﾊﾟ': 'パ', 'ﾋﾟ': 'ピ', 'ﾌﾟ': 'プ', 'ﾍﾟ': 'ペ', 'ﾎﾟ': 'ポ',
+    'ｳﾞ': 'ヴ', 'ﾜﾞ': 'ヷ', 'ｦﾞ': 'ヺ',
+    'ｱ': 'ア', 'ｲ': 'イ', 'ｳ': 'ウ', 'ｴ': 'エ', 'ｵ': 'オ',
+    'ｶ': 'カ', 'ｷ': 'キ', 'ｸ': 'ク', 'ｹ': 'ケ', 'ｺ': 'コ',
+    'ｻ': 'サ', 'ｼ': 'シ', 'ｽ': 'ス', 'ｾ': 'セ', 'ｿ': 'ソ',
+    'ﾀ': 'タ', 'ﾁ': 'チ', 'ﾂ': 'ツ', 'ﾃ': 'テ', 'ﾄ': 'ト',
+    'ﾅ': 'ナ', 'ﾆ': 'ニ', 'ﾇ': 'ヌ', 'ﾈ': 'ネ', 'ﾉ': 'ノ',
+    'ﾊ': 'ハ', 'ﾋ': 'ヒ', 'ﾌ': 'フ', 'ﾍ': 'ヘ', 'ﾎ': 'ホ',
+    'ﾏ': 'マ', 'ﾐ': 'ミ', 'ﾑ': 'ム', 'ﾒ': 'メ', 'ﾓ': 'モ',
+    'ﾔ': 'ヤ', 'ﾕ': 'ユ', 'ﾖ': 'ヨ',
+    'ﾗ': 'ラ', 'ﾘ': 'リ', 'ﾙ': 'ル', 'ﾚ': 'レ', 'ﾛ': 'ロ',
+    'ﾜ': 'ワ', 'ｦ': 'ヲ', 'ﾝ': 'ン',
+    'ｧ': 'ァ', 'ｨ': 'ィ', 'ｩ': 'ゥ', 'ｪ': 'ェ', 'ｫ': 'ォ',
+    'ｯ': 'ッ', 'ｬ': 'ャ', 'ｭ': 'ュ', 'ｮ': 'ョ',
+    '｡': '。', '､': '、', 'ｰ': 'ー', '｢': '「', '｣': '」', '･': '・'
+  };
+
+  const reg = new RegExp('(' + Object.keys(hankakuKatakana).join('|') + ')', 'g');
+  result = result.replace(reg, s => hankakuKatakana[s]);
+
+  const hankakuSymbols = {
+    '!': '！', '"': '”', '#': '＃', '$': '＄', '%': '％', '&': '＆', "'": '’',
+    '(': '（', ')': '）', '*': '＊', '+': '＋', ',': '、', '-': '－', '.': '．', '/': '／',
+    ':': '：', ';': '；', '<': '＜', '=': '＝', '>': '＞', '?': '？', '@': '＠',
+    '[': '［', '\\': '￥', ']': '］', '^': '＾', '_': '＿', '`': '‘',
+    '{': '｛', '|': '｜', '}': '｝', '~': '～'
+  };
+  const symbolReg = new RegExp('(' + Object.keys(hankakuSymbols).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g');
+  result = result.replace(symbolReg, s => hankakuSymbols[s]);
+  
+  result = result.replace(/(\u30ab|\u30ad|\u30af|\u30b1|\u30b3|\u30b5|\u30b7|\u30b9|\u30bb|\u30bd|\u30bf|\u30c1|\u30c4|\u30c6|\u30c8|\u30cf|\u30d2|\u30d5|\u30d8|\u30db|\u30a6)(\u3099)/g, s => String.fromCharCode(s.charCodeAt(0) + 1));
+  result = result.replace(/(\u30cf|\u30d2|\u30d5|\u30d8|\u30db)(\u309a)/g, s => String.fromCharCode(s.charCodeAt(0) + 2));
+
+  return result;
+}
+
+
 function calculateTaxAmount_(amount, taxCategory) {
   if (!amount || !taxCategory) return 0;
   
@@ -113,6 +169,7 @@ function handleTaxCodeRemoval(sheet, row, headers) {
   }
 }
 
+// ▼▼▼【修正箇所】領収書の店名・摘要も正規化する ▼▼▼
 function logOcrResult(receipts, originalFileId) {
   loadConfig_();
   const contextInfo = `File ID: ${originalFileId}`;
@@ -126,10 +183,11 @@ function logOcrResult(receipts, originalFileId) {
       let kanjo = null, hojo = null;
       let isLearned = false;
       let finalDescription = r.description || '';
+      let finalStoreName = r.storeName || '';
 
       for (const rule of learningRules) {
         if (!rule.storeName) continue;
-        const ocrData = { storeName: normalizeStoreName(r.storeName), description: r.description || '', amount: Number(r.amount) || 0 };
+        const ocrData = { storeName: normalizeStoreName(finalStoreName), description: finalDescription, amount: Number(r.amount) || 0 };
         const storeMatch = ocrData.storeName.includes(rule.storeName) || rule.storeName.includes(ocrData.storeName);
         const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
         let amountMatch = true;
@@ -140,7 +198,7 @@ function logOcrResult(receipts, originalFileId) {
           kanjo = rule.kanjo;
           hojo = rule.hojo;
           if (rule.descriptionTemplate) {
-            finalDescription = rule.descriptionTemplate.replace(/【日付】/g, r.date || '').replace(/【店名】/g, r.storeName || '').replace(/【金額】/g, Math.trunc(r.amount || 0));
+            finalDescription = rule.descriptionTemplate.replace(/【日付】/g, r.date || '').replace(/【店名】/g, finalStoreName).replace(/【金額】/g, Math.trunc(r.amount || 0));
           }
           isLearned = true;
           break;
@@ -148,15 +206,19 @@ function logOcrResult(receipts, originalFileId) {
       }
 
       if (!isLearned) {
-        kanjo = inferAccountTitle(r.storeName, r.description, r.amount, masterData);
+        kanjo = inferAccountTitle(finalStoreName, finalDescription, r.amount, masterData);
         hojo = "";
       }
 
       const truncatedAmount = Math.trunc(r.amount || 0);
       const truncatedTaxAmount = Math.trunc(r.tax_amount || 0);
 
+      // シートに書き込む直前に正規化
+      const normalizedStoreName = normalizeText_(finalStoreName);
+      const normalizedFinalDescription = normalizeText_(finalDescription);
+
       return [
-        Utilities.getUuid(), new Date(), r.date, r.storeName, finalDescription,
+        Utilities.getUuid(), new Date(), r.date, normalizedStoreName, normalizedFinalDescription,
         kanjo, hojo, r.tax_rate, truncatedAmount, truncatedTaxAmount, r.tax_code,
         getTaxCategoryCode(r.tax_rate, r.tax_code),
         `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`, r.note
@@ -176,6 +238,7 @@ function logOcrResult(receipts, originalFileId) {
     throw e;
   }
 }
+// ▲▲▲ 修正箇所 ▲▲▲
 
 function logTokenUsage(fileName, usage) {
   loadConfig_();
@@ -381,11 +444,12 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
     const newRows = verifiedTransactions.map(tx => {
       let isLearned = false;
       let inferred = {};
+      const normalizedDescription = normalizeText_(tx.取引内容 || '');
 
       for (const rule of learningRules) {
         if (rule.storeName !== '') continue;
         
-        const keywordMatch = !rule.descriptionKeyword || (tx.取引内容 || '').includes(rule.descriptionKeyword);
+        const keywordMatch = !rule.descriptionKeyword || normalizedDescription.includes(rule.descriptionKeyword);
         const passbookMatch = !rule.passbookAccountName || rule.passbookAccountName === passbookAccountName;
 
         if (keywordMatch && passbookMatch) {
@@ -400,7 +464,7 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
       }
 
       if (!isLearned) {
-        inferred = inferPassbookAccountTitle(tx.取引内容);
+        inferred = inferPassbookAccountTitle(normalizedDescription);
       }
       
       const isDeposit = Number(tx.入金額) > 0;
@@ -409,7 +473,7 @@ function logPassbookResult(transactions, originalFileId, originalFileName) {
       else debitTaxCategory = inferred.taxCategory;
 
       return [
-        Utilities.getUuid(), new Date(), tx.取引日, tx.取引内容,
+        Utilities.getUuid(), new Date(), tx.取引日, normalizedDescription,
         tx.入金額, tx.出金額, tx.残高,
         passbookAccountName, inferred.accountTitle, inferred.subAccount,
         debitTaxCategory, creditTaxCategory,
