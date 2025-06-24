@@ -51,7 +51,9 @@ function performOcrOnPendingFiles(startTime) {
     }
 
     const rowData = data[i];
-    if (rowData[2] === STATUS.PENDING) {
+    // ▼▼▼【修正箇所】「処理中」のまま止まったファイルも再処理の対象にする ▼▼▼
+    if (rowData[2] === STATUS.PENDING || rowData[2] === STATUS.PROCESSING) {
+    // ▲▲▲ 修正箇所 ▲▲▲
       const fileId = rowData[0];
       const fileName = rowData[1];
       const rowNum = i + 1;
@@ -156,7 +158,9 @@ function performOcrOnPassbookFiles(startTime) {
     }
 
     const rowData = data[i];
-    if (rowData[COL['ステータス']] === STATUS.PENDING) {
+    // ▼▼▼【修正箇所】「処理中」のまま止まったファイルも再処理の対象にする ▼▼▼
+    if (rowData[COL['ステータス']] === STATUS.PENDING || rowData[COL['ステータス']] === STATUS.PROCESSING) {
+    // ▲▲▲ 修正箇所 ▲▲▲
       const fileId = rowData[COL['ファイルID']];
       const fileName = rowData[COL['ファイル名']];
       const bankType = rowData[COL['銀行タイプ']];
