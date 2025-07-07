@@ -51,9 +51,7 @@ function performOcrOnPendingFiles(startTime) {
     }
 
     const rowData = data[i];
-    // ▼▼▼【修正箇所】「処理中」のまま止まったファイルも再処理の対象にする ▼▼▼
     if (rowData[2] === STATUS.PENDING || rowData[2] === STATUS.PROCESSING) {
-    // ▲▲▲ 修正箇所 ▲▲▲
       const fileId = rowData[0];
       const fileName = rowData[1];
       const rowNum = i + 1;
@@ -130,7 +128,7 @@ function processNewPassbookFiles() {
         if (fileName.includes('UFJ')) bankType = 'MUFG';
         if (fileName.includes('OSAKA_SHINKIN')) bankType = 'OSAKA_SHINKIN';
         
-        fileListSheet.appendRow([fileId, file.getName(), bankType, STATUS.PENDING, '', new Date()]);
+        fileListSheet.appendRow([fileId, file.getName(), bankType, STATUS.PENDING, '', '', new Date()]);
         existingFileIds.push(fileId);
       }
     }
@@ -141,6 +139,7 @@ function processNewPassbookFiles() {
   }
 }
 
+// ▼▼▼【修正箇所】AIからの応答(配列)を正しく解析する ▼▼▼
 function performOcrOnPassbookFiles(startTime) {
   loadConfig_();
   console.log('ステップ2: 通帳のOCR処理を開始...');
@@ -158,9 +157,7 @@ function performOcrOnPassbookFiles(startTime) {
     }
 
     const rowData = data[i];
-    // ▼▼▼【修正箇所】「処理中」のまま止まったファイルも再処理の対象にする ▼▼▼
     if (rowData[COL['ステータス']] === STATUS.PENDING || rowData[COL['ステータス']] === STATUS.PROCESSING) {
-    // ▲▲▲ 修正箇所 ▲▲▲
       const fileId = rowData[COL['ファイルID']];
       const fileName = rowData[COL['ファイル名']];
       const bankType = rowData[COL['銀行タイプ']];
@@ -177,22 +174,24 @@ function performOcrOnPassbookFiles(startTime) {
         Utilities.sleep(1500);
 
         if (result.success) {
-          const ocrData = JSON.parse(result.data);
-          if (ocrData && ocrData.length > 0) {
-            const passbookAccountName = logPassbookResult(ocrData, fileId, fileName);
+          const transactions = JSON.parse(result.data); // AIからは配列が直接返ってくる
+          
+          if (transactions && Array.isArray(transactions) && transactions.length > 0) {
+            const rowCount = transactions.length; // 行数は配列の長さで取得
+            const passbookAccountName = logPassbookResult(transactions, fileId, fileName);
             logTokenUsage(fileName, result.usage);
             
             const newFileName = generateNewPassbookFileName_(passbookAccountName, fileName);
             file.setName(newFileName);
             console.log(`ファイル名を変更しました: ${newFileName}`);
 
-            fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.PROCESSED, '']]);
+            fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.PROCESSED, rowCount]]);
             file.moveTo(archiveFolder);
             console.log(`通帳OCR処理成功: ${fileName}`);
           } else {
             const msg = `ファイル ${fileName} から取引データは検出されませんでした。`;
             console.log(msg);
-            fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.ERROR, msg]]);
+            fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.ERROR, 0]]);
           }
         } else {
           throw new Error(result.error);
@@ -201,7 +200,7 @@ function performOcrOnPassbookFiles(startTime) {
         const errorMessage = e.message || e.toString();
         logError_('performOcrOnPassbookFiles', e, contextInfo);
         console.error(`通帳OCR処理中にエラー: ${fileName}, Error: ${errorMessage}`);
-        fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.ERROR, errorMessage]]);
+        fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.ERROR, 0]]);
       } finally {
         fileListSheet.getRange(rowNum, COL['登録日時'] + 1).setValue(new Date());
       }
@@ -209,3 +208,4 @@ function performOcrOnPassbookFiles(startTime) {
   }
   console.log('ステップ2: 通帳のOCR処理が完了。');
 }
+// ▲▲▲ 修正箇所 ▲▲▲
