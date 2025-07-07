@@ -4,7 +4,7 @@
 // =================================================================================
 
 /**************************************************************************************************
- * * 領収書・通帳OCRシステム (v8.9 Final Code)
+ * * 領収書・通帳OCRシステム (v9.6 Final Code)
  * * 概要:
  * - 全機能と修正を反映した完全版のコード。
  **************************************************************************************************/
@@ -47,7 +47,7 @@ function loadConfig_() {
       LEARNING_SHEET: '学習データ',
       CONFIG_SHEET: '設定',
       ERROR_LOG_SHEET: 'エラーログ',
-      GEMINI_MODEL: 'gemini-2.5-flash-preview-05-20',
+      GEMINI_MODEL: 'gemini-1.5-flash-latest',
       THINKING_BUDGET: 10000,
       
       FILE_LIST_SHEET: 'ファイルリスト',
@@ -83,7 +83,7 @@ function loadConfig_() {
         TOKEN_LOG: ['日時', 'ファイル名', '入力トークン', '思考トークン', '出力トークン', '合計トークン'],
         LEARNING: ['店名', '摘要（キーワード）', '通帳勘定科目', '金額条件', '金額', '勘定科目', '補助科目', '税区分', '摘要のテンプレート', '学習登録日時', '取引ID'],
         ERROR_LOG: ['日時', '関数名', 'エラーメッセージ', '関連情報', 'スタックトレース'],
-        PASSBOOK_FILE_LIST: ['ファイルID', 'ファイル名', '銀行タイプ', 'ステータス', 'エラー詳細', '登録日時'],
+        PASSBOOK_FILE_LIST: ['ファイルID', 'ファイル名', '銀行タイプ', 'ステータス', '抽出行数', 'エラー詳細', '登録日時'],
         PASSBOOK_RESULT: [
             '取引ID', '処理日時', '取引日', '摘要', '入金額', '出金額', '残高',
             '通帳勘定科目', '相手方勘定科目', '相手方補助科目',
@@ -134,6 +134,7 @@ function onOpen() {
     checkMenu.addItem('重大なエラーをチェック (通帳)', 'highlightPassbookCriticalErrors_');
     checkMenu.addSeparator();
     checkMenu.addItem('選択行のハイライトを解除', 'removeHighlight_');
+    checkMenu.addItem('選択したファイルを再処理 (通帳)', 'reprocessSelectedFile_');
     checkMenu.addSeparator();
     checkMenu.addItem('選択した取引を削除', 'deleteSelectedTransactions');
     menu.addSubMenu(checkMenu);
@@ -142,6 +143,8 @@ function onOpen() {
     const settingsMenu = SpreadsheetApp.getUi().createMenu('その他・設定');
     settingsMenu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
     settingsMenu.addItem('フィルタをオンにする (現在のシート)', 'activateFilter');
+    settingsMenu.addSeparator();
+    settingsMenu.addItem('【初回のみ】国税庁APIキーを設定', 'setNationalTaxAgencyApiKey_');
     settingsMenu.addSeparator();
     settingsMenu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
     settingsMenu.addItem('選択行の通帳をプレビュー', 'showPassbookPreview');
@@ -226,5 +229,24 @@ function mainProcessPassbooks() {
     logError_('mainProcessPassbooks', e);
   } finally {
     lock.releaseLock();
+  }
+}
+
+function setNationalTaxAgencyApiKey_() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.prompt(
+    '国税庁APIキーの設定',
+    '国税庁から発行されたアプリケーションID（APIキー）を入力してください。',
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() == ui.Button.OK) {
+    const apiKey = response.getResponseText();
+    if (apiKey && apiKey.length > 10) {
+      PropertiesService.getScriptProperties().setProperty('NTA_API_KEY', apiKey);
+      ui.alert('設定完了', 'APIキーを保存しました。', ui.ButtonSet.OK);
+    } else {
+      ui.alert('エラー', '有効なAPIキーが入力されませんでした。', ui.ButtonSet.OK);
+    }
   }
 }

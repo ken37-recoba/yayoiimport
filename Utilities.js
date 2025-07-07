@@ -176,6 +176,18 @@ function logOcrResult(receipts, originalFileId) {
       let isLearned = false;
       let finalDescription = r.description || '';
       let finalStoreName = r.storeName || '';
+      let finalNote = r.note || '';
+      let finalTaxCode = r.tax_code || '';
+
+      if (finalTaxCode) {
+        const verificationResult = verifyInvoiceNumber_(finalTaxCode);
+        finalTaxCode = verificationResult.formattedNumber;
+        if (verificationResult.isValid) {
+          finalStoreName = verificationResult.officialName;
+        } else if (verificationResult.note) {
+          finalNote = `${finalNote} ${verificationResult.note}`.trim();
+        }
+      }
 
       for (const rule of learningRules) {
         if (!rule.storeName) continue;
@@ -210,9 +222,9 @@ function logOcrResult(receipts, originalFileId) {
 
       return [
         Utilities.getUuid(), new Date(), r.date, normalizedStoreName, normalizedFinalDescription,
-        kanjo, hojo, r.tax_rate, truncatedAmount, truncatedTaxAmount, r.tax_code,
-        getTaxCategoryCode(r.tax_rate, r.tax_code),
-        `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`, r.note
+        kanjo, hojo, r.tax_rate, truncatedAmount, truncatedTaxAmount, finalTaxCode,
+        getTaxCategoryCode(r.tax_rate, finalTaxCode),
+        `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`, finalNote
       ];
     });
 
@@ -387,7 +399,6 @@ function generateNewFileName_(transaction, originalFileName) {
 function generateNewPassbookFileName_(passbookAccountName, originalFileName) {
   try {
     const safeAccountName = (passbookAccountName || '不明な通帳').replace(/[\\/:*?"<>|]/g, '_');
-    // ▼▼▼【修正箇所】日付フォーマットを修正 ▼▼▼
     const formattedDate = Utilities.formatDate(new Date(), "JST", "yyyyMMdd");
     const extension = originalFileName.includes('.') ? originalFileName.split('.').pop() : 'jpg';
     return `${safeAccountName}_${formattedDate}.${extension}`;
@@ -519,6 +530,8 @@ function verifyAndCorrectPassbookBalances(transactions) {
         curr.入金額 = withdrawal;
         curr.出金額 = deposit;
         curr.備考 = (curr.備考 || '') + '[入出金自動補正]';
+      } else {
+        curr.備考 = (curr.備考 || '') + '[【要確認：残高不整合】]';
       }
     }
   }
