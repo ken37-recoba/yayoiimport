@@ -1,7 +1,70 @@
 // =================================================================================
-// ファイル名: Utilities.gs
+// ファイル名: Utilities.js (安定化対応版)
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
+
+// ▼▼▼【改善点】国税庁API連携とキャッシュ機能の実装 ▼▼▼
+/**
+ * 国税庁の適格請求書発行事業者公表システムAPIを利用して、登録番号を検証します。
+ * 結果は1時間キャッシュされ、APIへの不要なリクエストを削減します。
+ * @param {string} rawInvoiceNumber - 検証する登録番号（例: T1234567890123）。
+ * @returns {object} 検証結果オブジェクト { isValid: boolean, officialName: string, formattedNumber: string, note: string }
+ */
+function verifyInvoiceNumber_(rawInvoiceNumber) {
+  const defaultResult = { isValid: false, officialName: null, formattedNumber: rawInvoiceNumber, note: '' };
+  if (!rawInvoiceNumber || typeof rawInvoiceNumber !== 'string') return defaultResult;
+
+  const formattedNumber = rawInvoiceNumber.trim().toUpperCase();
+  if (!formattedNumber.startsWith('T') || formattedNumber.length !== 14) {
+    defaultResult.note = '【要確認：登録番号の形式不正】';
+    return defaultResult;
+  }
+  
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(formattedNumber);
+  if (cached) {
+    console.log(`インボイス番号の検証結果をキャッシュから取得: ${formattedNumber}`);
+    return JSON.parse(cached);
+  }
+
+  try {
+    const apiKey = PropertiesService.getScriptProperties().getProperty('NTA_API_KEY');
+    if (!apiKey) {
+      throw new Error('国税庁APIキーが設定されていません。');
+    }
+    const today = Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd');
+    const url = `https://api.invoice-kohyo.nta.go.jp/1/registrations?id=${apiKey}&number=${formattedNumber}&history=0&date=${today}`;
+    
+    const response = UrlFetchApp.fetch(url, { 'method': 'get', 'muteHttpExceptions': true });
+    const responseCode = response.getResponseCode();
+    const responseBody = response.getContentText();
+
+    if (responseCode === 200) {
+      const json = JSON.parse(responseBody);
+      if (json.count === 1 && json.registration[0]) {
+        const reg = json.registration[0];
+        const result = {
+          isValid: true,
+          officialName: reg.name,
+          formattedNumber: formattedNumber,
+          note: ''
+        };
+        cache.put(formattedNumber, JSON.stringify(result), 3600); // 1時間キャッシュ
+        return result;
+      }
+    }
+    
+    defaultResult.note = '【要確認：登録番号が無効または存在しません】';
+    cache.put(formattedNumber, JSON.stringify(defaultResult), 3600); // エラー結果もキャッシュ
+    return defaultResult;
+
+  } catch (e) {
+    logError_('verifyInvoiceNumber_', e, `Number: ${formattedNumber}`);
+    defaultResult.note = '【要確認：国税庁APIエラー】';
+    return defaultResult;
+  }
+}
+// ▲▲▲ 改善点 ▲▲▲
 
 function normalizeText_(text) {
   if (!text || typeof text !== 'string') return '';
@@ -336,7 +399,6 @@ function getFileIdFromCell(sheet, row) {
   } else if (sheetName === CONFIG.PASSBOOK_RESULT_SHEET || sheetName === CONFIG.PASSBOOK_EXPORTED_SHEET) {
     headers = CONFIG.HEADERS.PASSBOOK_RESULT;
   } else {
-    showError('このシートではプレビュー機能は利用できません。');
     return null;
   }
   const linkCol = headers.indexOf('ファイルへのリンク') + 1;

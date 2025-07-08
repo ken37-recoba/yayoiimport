@@ -1,12 +1,12 @@
 // =================================================================================
-// ファイル名: コード.gs
+// ファイル名: code.js (安定化対応版)
 // 役割: システム全体の制御と、主要なイベントハンドラを管理します。
 // =================================================================================
 
 /**************************************************************************************************
- * * 領収書・通帳OCRシステム (v9.6 Gemini 2.5 Flash Update)
+ * * 領収書・通帳OCRシステム (v12.1 安定化対応)
  * * 概要:
- * - APIモデルをコストと性能のバランスに優れた `gemini-2.5-flash` に更新。
+ * - 大量ファイル処理時のタイムアウトを防ぐため、バッチ処理方式に移行。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -43,13 +43,14 @@ function loadConfig_() {
       PASSBOOK_ARCHIVE_FOLDER_ID: settings['通帳アーカイブ済みフォルダID'],
       YAYOI_EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
       EXECUTION_TIME_LIMIT_SECONDS: 300,
+      // ▼▼▼【改善点】タイムアウト防止のため、1回の実行で処理する上限数を設定 ▼▼▼
+      BATCH_SIZE: 5, 
+      // ▲▲▲ 改善点 ▲▲▲
       MASTER_SHEET: '勘定科目マスター',
       LEARNING_SHEET: '学習データ',
       CONFIG_SHEET: '設定',
       ERROR_LOG_SHEET: 'エラーログ',
-      // ▼▼▼【修正箇所】ご指定のモデル名に更新 ▼▼▼
       GEMINI_MODEL: 'gemini-2.5-flash',
-      // ▲▲▲ 修正箇所 ▲▲▲
       
       FILE_LIST_SHEET: 'ファイルリスト',
       OCR_RESULT_SHEET: 'OCR結果',
@@ -147,8 +148,10 @@ function onOpen() {
     settingsMenu.addSeparator();
     settingsMenu.addItem('【初回のみ】国税庁APIキーを設定', 'setNationalTaxAgencyApiKey_');
     settingsMenu.addSeparator();
+    // ▼▼▼【サイドバー中止】元のプレビュー機能に戻す ▼▼▼
     settingsMenu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
     settingsMenu.addItem('選択行の通帳をプレビュー', 'showPassbookPreview');
+    // ▲▲▲ 変更箇所 ▲▲▲
     menu.addSubMenu(settingsMenu);
     
     menu.addToUi();

@@ -1,5 +1,5 @@
 // =================================================================================
-// ファイル名: UI.gs
+// ファイル名: UI.js (安定化対応版)
 // 役割: メニュー操作など、ユーザーインターフェースに関連する関数を管理します。
 // =================================================================================
 
@@ -217,7 +217,6 @@ function moveTransactionsBackToOcr() {
   }
 }
 
-// ▼▼▼【修正箇所】通帳の差し戻し機能を実装 ▼▼▼
 function movePassbookTransactionsBackToOcr() {
   loadConfig_();
   const ui = SpreadsheetApp.getUi();
@@ -272,10 +271,65 @@ function movePassbookTransactionsBackToOcr() {
     showError('処理中にエラーが発生しました。\n\n詳細: ' + e.message);
   }
 }
-// ▲▲▲ 修正箇所 ▲▲▲
 
-function showReceiptPreview() { /* 実装は後続のタスク */ }
-function showPassbookPreview() { /* 実装は後続のタスク */ }
+// ▼▼▼【サイドバー中止】元のプレビュー機能に戻す ▼▼▼
+function showReceiptPreview() {
+  showPreview_('receipt');
+}
+
+function showPassbookPreview() {
+  showPreview_('passbook');
+}
+
+function showPreview_(type) {
+  loadConfig_();
+  const sheet = SpreadsheetApp.getActiveSheet();
+  const sheetName = sheet.getName();
+  const targetSheets = type === 'receipt' 
+    ? [CONFIG.OCR_RESULT_SHEET, CONFIG.EXPORTED_SHEET]
+    : [CONFIG.PASSBOOK_RESULT_SHEET, CONFIG.PASSBOOK_EXPORTED_SHEET];
+
+  if (!targetSheets.includes(sheetName)) {
+    showError(`この機能は「${targetSheets.join('」または「')}」シートで実行してください。`);
+    return;
+  }
+  
+  const range = sheet.getActiveRange();
+  if (range.getNumRows() > 1 || range.getRow() <= 1) {
+    showError('プレビューするデータ行を1行だけ選択してください。');
+    return;
+  }
+  
+  const fileId = getFileIdFromCell(sheet, range.getRow());
+  if (!fileId) {
+    showError('選択された行からファイル情報が見つかりませんでした。');
+    return;
+  }
+
+  try {
+    const htmlTemplate = HtmlService.createTemplateFromFile('Preview');
+    htmlTemplate.fileId = fileId;
+    const htmlOutput = htmlTemplate.evaluate().setWidth(600).setHeight(500);
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, '画像プレビュー');
+  } catch (e) {
+    logError_('showPreview_', e, `File ID: ${fileId}`);
+    showError('プレビューの表示中にエラーが発生しました。');
+  }
+}
+
+function getImageDataForPreview(fileId) {
+  try {
+    const file = DriveApp.getFileById(fileId);
+    const blob = file.getBlob();
+    const dataUrl = `data:${blob.getContentType()};base64,${Utilities.base64Encode(blob.getBytes())}`;
+    return { success: true, dataUrl: dataUrl, fileName: file.getName() };
+  } catch (e) {
+    logError_('getImageDataForPreview', e, `File ID: ${fileId}`);
+    return { success: false, message: e.message };
+  }
+}
+// ▲▲▲ 変更箇所 ▲▲▲
+
 function deleteSelectedTransactions() { /* 実装は後続のタスク */ }
 function insertDummyInvoiceNumber() { /* 実装は後続のタスク */ }
 

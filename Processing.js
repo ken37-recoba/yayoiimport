@@ -1,5 +1,5 @@
 // =================================================================================
-// ファイル名: Processing.gs
+// ファイル名: Processing.js (安定化対応版)
 // 役割: ファイルの検出やOCR処理など、中核となるバックグラウンド処理を管理します。
 // =================================================================================
 
@@ -42,11 +42,14 @@ function performOcrOnPendingFiles(startTime) {
   const fileListSheet = getSheet(CONFIG.FILE_LIST_SHEET);
   const archiveFolder = DriveApp.getFolderById(CONFIG.ARCHIVE_FOLDER_ID);
   const data = fileListSheet.getDataRange().getValues();
+  // ▼▼▼【改善点】バッチ処理のためのカウンター ▼▼▼
+  let processedCount = 0;
   
   for (let i = 1; i < data.length; i++) {
     const elapsedTime = (new Date().getTime() - startTime.getTime()) / 1000;
-    if (elapsedTime > CONFIG.EXECUTION_TIME_LIMIT_SECONDS) {
-      console.log(`実行時間が上限(${CONFIG.EXECUTION_TIME_LIMIT_SECONDS}秒)に近づいたため、領収書処理を中断します。`);
+    // ▼▼▼【改善点】実行時間または処理件数の上限に達したら中断 ▼▼▼
+    if (elapsedTime > CONFIG.EXECUTION_TIME_LIMIT_SECONDS || processedCount >= CONFIG.BATCH_SIZE) {
+      console.log(`実行時間またはバッチサイズの上限に達したため、領収書処理を中断します。Processed: ${processedCount}`);
       break;
     }
 
@@ -95,6 +98,9 @@ function performOcrOnPendingFiles(startTime) {
         fileListSheet.getRange(rowNum, 3, 1, 2).setValues([[STATUS.ERROR, errorMessage]]);
       } finally {
         fileListSheet.getRange(rowNum, 5).setValue(new Date());
+        // ▼▼▼【改善点】処理件数をインクリメント ▼▼▼
+        processedCount++;
+        // ▲▲▲ 改善点 ▲▲▲
       }
     }
   }
@@ -147,11 +153,14 @@ function performOcrOnPassbookFiles(startTime) {
   const data = fileListSheet.getDataRange().getValues();
   const headers = data[0];
   const COL = headers.reduce((acc, h, i) => ({...acc, [h]: i}), {});
+  // ▼▼▼【改善点】バッチ処理のためのカウンター ▼▼▼
+  let processedCount = 0;
   
   for (let i = 1; i < data.length; i++) {
     const elapsedTime = (new Date().getTime() - startTime.getTime()) / 1000;
-    if (elapsedTime > CONFIG.EXECUTION_TIME_LIMIT_SECONDS) {
-      console.log(`実行時間が上限(${CONFIG.EXECUTION_TIME_LIMIT_SECONDS}秒)に近づいたため、通帳処理を中断します。`);
+    // ▼▼▼【改善点】実行時間または処理件数の上限に達したら中断 ▼▼▼
+    if (elapsedTime > CONFIG.EXECUTION_TIME_LIMIT_SECONDS || processedCount >= CONFIG.BATCH_SIZE) {
+      console.log(`実行時間またはバッチサイズの上限に達したため、通帳処理を中断します。Processed: ${processedCount}`);
       break;
     }
 
@@ -202,6 +211,9 @@ function performOcrOnPassbookFiles(startTime) {
         fileListSheet.getRange(rowNum, COL['ステータス'] + 1, 1, 2).setValues([[STATUS.ERROR, 0]]);
       } finally {
         fileListSheet.getRange(rowNum, COL['登録日時'] + 1).setValue(new Date());
+        // ▼▼▼【改善点】処理件数をインクリメント ▼▼▼
+        processedCount++;
+        // ▲▲▲ 改善点 ▲▲▲
       }
     }
   }
