@@ -139,7 +139,6 @@ function processNewPassbookFiles() {
   }
 }
 
-// ▼▼▼【修正箇所】AIからの応答(配列)を正しく解析する ▼▼▼
 function performOcrOnPassbookFiles(startTime) {
   loadConfig_();
   console.log('ステップ2: 通帳のOCR処理を開始...');
@@ -174,10 +173,10 @@ function performOcrOnPassbookFiles(startTime) {
         Utilities.sleep(1500);
 
         if (result.success) {
-          const transactions = JSON.parse(result.data); // AIからは配列が直接返ってくる
+          const transactions = JSON.parse(result.data);
           
           if (transactions && Array.isArray(transactions) && transactions.length > 0) {
-            const rowCount = transactions.length; // 行数は配列の長さで取得
+            const rowCount = transactions.length;
             const passbookAccountName = logPassbookResult(transactions, fileId, fileName);
             logTokenUsage(fileName, result.usage);
             
@@ -208,4 +207,3 @@ function performOcrOnPassbookFiles(startTime) {
   }
   console.log('ステップ2: 通帳のOCR処理が完了。');
 }
-// ▲▲▲ 修正箇所 ▲▲▲

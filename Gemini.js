@@ -141,7 +141,6 @@ function callPassbookGeminiApi(fileBlob, bankType) {
     return callGeminiApi(fileBlob, prompt);
 }
 
-// ▼▼▼【修正箇所】プロンプトをシンプルで強力なものに戻す ▼▼▼
 function getPassbookGeminiPrompt(bankType) {
     const currentYear = new Date().getFullYear();
     const reiwaStartYear = 2019;
@@ -198,7 +197,6 @@ function getPassbookGeminiPrompt(bankType) {
 
     return basePrompt + bankSpecificInstructions;
 }
-// ▲▲▲ 修正箇所 ▲▲▲
 
 function inferPassbookAccountTitle(description) {
   loadConfig_();
