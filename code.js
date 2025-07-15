@@ -1,12 +1,12 @@
 // =================================================================================
-// ファイル名: code.js (安定化対応版)
+// ファイル名: code.js (国税庁API連携の無効化版)
 // 役割: システム全体の制御と、主要なイベントハンドラを管理します。
 // =================================================================================
 
 /**************************************************************************************************
- * * 領収書・通帳OCRシステム (v12.1 安定化対応)
+ * * 領収書・通帳OCRシステム (v12.2 国税庁API連携無効化)
  * * 概要:
- * - 大量ファイル処理時のタイムアウトを防ぐため、バッチ処理方式に移行。
+ * - 外部要因による不安定化のため、国税庁APIとの連携機能を完全に排除。
  **************************************************************************************************/
 /**************************************************************************************************
  * 1. グローバル設定 (Global Settings)
@@ -43,9 +43,7 @@ function loadConfig_() {
       PASSBOOK_ARCHIVE_FOLDER_ID: settings['通帳アーカイブ済みフォルダID'],
       YAYOI_EXPORT_FOLDER_ID: '1gPUmeOungbwWPB4KPsQCxKSK-3xgKnI8',
       EXECUTION_TIME_LIMIT_SECONDS: 300,
-      // ▼▼▼【改善点】タイムアウト防止のため、1回の実行で処理する上限数を設定 ▼▼▼
       BATCH_SIZE: 5, 
-      // ▲▲▲ 改善点 ▲▲▲
       MASTER_SHEET: '勘定科目マスター',
       LEARNING_SHEET: '学習データ',
       CONFIG_SHEET: '設定',
@@ -146,12 +144,12 @@ function onOpen() {
     settingsMenu.addItem('【初回/変更時】定期実行をセットアップ', 'createTimeBasedTrigger_');
     settingsMenu.addItem('フィルタをオンにする (現在のシート)', 'activateFilter');
     settingsMenu.addSeparator();
-    settingsMenu.addItem('【初回のみ】国税庁APIキーを設定', 'setNationalTaxAgencyApiKey_');
+    // ▼▼▼【改善箇所】国税庁APIキー設定メニューを削除 ▼▼▼
+    // settingsMenu.addItem('【初回のみ】国税庁APIキーを設定', 'setNationalTaxAgencyApiKey_');
+    // ▲▲▲ 改善箇所 ▲▲▲
     settingsMenu.addSeparator();
-    // ▼▼▼【サイドバー中止】元のプレビュー機能に戻す ▼▼▼
     settingsMenu.addItem('選択行の領収書をプレビュー', 'showReceiptPreview');
     settingsMenu.addItem('選択行の通帳をプレビュー', 'showPassbookPreview');
-    // ▲▲▲ 変更箇所 ▲▲▲
     menu.addSubMenu(settingsMenu);
     
     menu.addToUi();
@@ -236,21 +234,6 @@ function mainProcessPassbooks() {
   }
 }
 
-function setNationalTaxAgencyApiKey_() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.prompt(
-    '国税庁APIキーの設定',
-    '国税庁から発行されたアプリケーションID（APIキー）を入力してください。',
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (response.getSelectedButton() == ui.Button.OK) {
-    const apiKey = response.getResponseText();
-    if (apiKey && apiKey.length > 10) {
-      PropertiesService.getScriptProperties().setProperty('NTA_API_KEY', apiKey);
-      ui.alert('設定完了', 'APIキーを保存しました。', ui.ButtonSet.OK);
-    } else {
-      ui.alert('エラー', '有効なAPIキーが入力されませんでした。', ui.ButtonSet.OK);
-    }
-  }
-}
+// ▼▼▼【改善箇所】国税庁APIキー設定関数を削除 ▼▼▼
+// function setNationalTaxAgencyApiKey_() { ... }
+// ▲▲▲ 改善箇所 ▲▲▲
