@@ -1,5 +1,5 @@
 // =================================================================================
-// ファイル名: Utilities.js (消費税区分 修正版)
+// ファイル名: Utilities.js (記号誤認識 対策版)
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
@@ -261,6 +261,13 @@ function logOcrResult(receipts, originalFileId) {
         }
       }
 
+      // ▼▼▼【改善箇所】高額取引の警告機能を追加 ▼▼▼
+      const HIGH_AMOUNT_THRESHOLD = 50000; // 5万円をしきい値とする
+      if (finalAmount > HIGH_AMOUNT_THRESHOLD) {
+        finalNote = `${finalNote} [【要確認：高額取引】]`.trim();
+      }
+      // ▲▲▲ 改善箇所 ▲▲▲
+
       if (finalTaxCode) {
         const verificationResult = verifyInvoiceNumber_(finalTaxCode);
         finalTaxCode = verificationResult.formattedNumber;
@@ -303,9 +310,7 @@ function logOcrResult(receipts, originalFileId) {
         if (kanjo && !exemptTitles.includes(kanjo)) {
           taxRate = 10;
           finalTaxAmount = Math.floor(finalAmount * 10 / 110);
-          // ▼▼▼【改善箇所】インボイス番号の有無を再評価して税区分を決定 ▼▼▼
           finalTaxCategory = getTaxCategoryCode(taxRate, finalTaxCode);
-          // ▲▲▲ 改善箇所 ▲▲▲
           finalNote = `${finalNote} [消費税を自動計算]`.trim();
           console.log(`消費税を自動計算しました。ファイル: ${originalFile.getName()}, 勘定科目: ${kanjo}, 金額: ${finalAmount}, 計算された消費税: ${finalTaxAmount}`);
         }
