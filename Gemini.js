@@ -1,5 +1,5 @@
 // =================================================================================
-// ファイル名: Gemini.js (UFJ読取り精度 再向上版)
+// ファイル名: Gemini.js (日付認識精度 向上版)
 // 役割: Gemini APIとの連携に特化した関数を管理します。
 // =================================================================================
 
@@ -63,10 +63,16 @@ function callGeminiApi(fileBlob, prompt) {
   }
 }
 
+// ▼▼▼【改善箇所】AIへの指示に「今日の日付」を追加 ▼▼▼
 function getGeminiPrompt(filename) {
+  const today = Utilities.formatDate(new Date(), "JST", "yyyy-MM-dd");
   return `
 # 指示
 この画像から領収書情報を抽出し、指定されたJSON形式で出力してください。
+- **【重要】現在の日付は ${today} です。** この情報を参考にして、領収書の日付の年（西暦）を正しく判断してください。特に「令和7年」や「7年」のような和暦や年が省略されている場合は、現在の日付に最も近い過去の日付となるように西暦を決定してください。
+- **【最重要】** 最終的な支払額は、「合計」「ご請求額」「お会計」「総額」といったキーワードの近くに記載されていることが多いです。これらのキーワードを探し、最も下に記載されている最大の金額を支払額としてください。
+- 「小計」や「税抜合計」と「合計」の両方がある場合、**必ず「合計」と書かれた隣の金額を amount に採用してください**。
+- 可能であれば、あなた自身で「税抜金額＋消費税額＝合計金額」となるか簡単な検算を行い、矛盾のない金額を amount として出力してください。
 - 1枚の画像に複数の税率が混在する場合、税率ごとに別のオブジェクトを生成してください。
 - 日付は西暦 (yyyy/mm/dd) に変換してください。
 - 金額は数値のみで出力してください。
@@ -89,6 +95,7 @@ function getGeminiPrompt(filename) {
 ]
 \`\`\``;
 }
+// ▲▲▲ 改善箇所 ▲▲▲
 
 function inferAccountTitle(storeName, description, amount, masterData) {
   loadConfig_();
@@ -186,7 +193,6 @@ function getPassbookGeminiPrompt(bankType) {
 \`\`\`
 `;
     
-    // ▼▼▼【改善箇所】UFJ銀行のルールをさらに厳格化 ▼▼▼
     let bankSpecificInstructions = '';
     if (bankType === 'MUFG') {
         bankSpecificInstructions = `
@@ -199,7 +205,6 @@ function getPassbookGeminiPrompt(bankType) {
 - **日付形式:** 日付は \`年-月日\` の形式です。例: \`07-428\` は令和7年4月28日です。
 `;
     }
-    // ▲▲▲ 改善箇所 ▲▲▲
 
     return basePrompt + bankSpecificInstructions;
 }

@@ -1,15 +1,8 @@
 // =================================================================================
-// ファイル名: Utilities.js (国税庁API連携の無効化版)
+// ファイル名: Utilities.js (日付認識精度 向上版)
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
-// ▼▼▼【改善箇所】国税庁APIとの連携を完全に無効化します ▼▼▼
-/**
- * 【無効化済み】この関数はAPI通信を行いません。
- * OCRで読み取った登録番号をそのまま返し、他の機能への影響を防ぎます。
- * @param {string} rawInvoiceNumber - OCRで読み取った登録番号。
- * @returns {object} 他の機能と互換性を保つためのダミーオブジェクト
- */
 function verifyInvoiceNumber_(rawInvoiceNumber) {
   // 国税庁API連携を無効化。常にOCRの結果を正とする。
   const formattedNumber = rawInvoiceNumber ? rawInvoiceNumber.trim().toUpperCase() : '';
@@ -17,11 +10,83 @@ function verifyInvoiceNumber_(rawInvoiceNumber) {
     isValid: false, 
     officialName: null, 
     formattedNumber: formattedNumber, 
-    note: '' // API関連のエラーは発生しないため、備考は常に空
+    note: ''
   };
 }
-// ▲▲▲ 改善箇所 ▲▲▲
 
+// ▼▼▼【改善箇所】日付を自動で検証・補正する関数を追加 ▼▼▼
+/**
+ * OCRで読み取った日付文字列を検証し、不自然な場合は処理日を基準に補正する。
+ * @param {string} ocrDateString - AIが読み取った日付文字列 (例: "2013/01/10", "1970/01/01")
+ * @returns {object} { correctedDate: string, wasCorrected: boolean, note: string }
+ */
+function correctDate_(ocrDateString) {
+  if (!ocrDateString || typeof ocrDateString !== 'string') {
+    return { correctedDate: ocrDateString, wasCorrected: false, note: '【要確認：日付不明】' };
+  }
+
+  try {
+    const processingDate = new Date();
+    // "7年1月6日" のような和暦文字列に対応するため、西暦部分を補完する前処理
+    let dateStrToParse = ocrDateString.replace(/\s/g, '');
+    const warekiMatch = dateStrToParse.match(/^(令和|平成|昭和|大正|明治)?(\d+|元)[年](\d+)[月](\d+)[日]/);
+    
+    if (warekiMatch) {
+      // 和暦が明確な場合、西暦に変換
+      // このロジックは簡易的なもので、より複雑な変換は別途必要になる可能性がある
+      let year = parseInt(warekiMatch[2] === '元' ? 1 : warekiMatch[2], 10);
+      const era = warekiMatch[1];
+      if (era === '令和' || (!era && year < 10)) { // 令和7年 or 7年
+        year += 2018;
+      } else if (era === '平成' || (!era && year > 10)) { // 平成25年 or 25年
+        year += 1988;
+      }
+      dateStrToParse = `${year}-${warekiMatch[3]}-${warekiMatch[4]}`;
+    }
+
+    let ocrDate = new Date(dateStrToParse);
+
+    // new Date() でのパースが失敗した場合 (Invalid Date)
+    if (isNaN(ocrDate.getTime())) {
+       // Unixエポックタイム (1970-01-01) になるケースもここで捕捉
+       if (new Date(ocrDateString).getTime() === 0) {
+         ocrDate = new Date(); // とりあえず今日の日付にして、後のロジックで補正させる
+       } else {
+         return { correctedDate: ocrDateString, wasCorrected: false, note: '【要確認：日付形式不正】' };
+       }
+    }
+
+    const ocrYear = ocrDate.getFullYear();
+    const processingYear = processingDate.getFullYear();
+    let correctedDate = new Date(ocrDate);
+    let wasCorrected = false;
+
+    // 読取り年が、処理年の1年以上前、または未来の場合、処理年で上書きする
+    if (ocrYear < processingYear - 1 || ocrYear > processingYear) {
+      correctedDate.setFullYear(processingYear);
+      wasCorrected = true;
+    }
+
+    // 補正後の日付が未来日になっていないかチェック
+    // (例: 処理日 2025/1/5, 領収書日 2024/12/30 -> AIが2025/12/30と誤認識 -> 処理年で補正後も未来日)
+    const bufferProcessingDate = new Date();
+    bufferProcessingDate.setDate(bufferProcessingDate.getDate() + 1); // 1日の猶予を持たせる
+
+    if (correctedDate > bufferProcessingDate) {
+      correctedDate.setFullYear(correctedDate.getFullYear() - 1);
+      wasCorrected = true;
+    }
+    
+    const finalDateString = Utilities.formatDate(correctedDate, 'JST', 'yyyy/MM/dd');
+    const note = wasCorrected ? '[日付を自動補正]' : '';
+
+    return { correctedDate: finalDateString, wasCorrected: wasCorrected, note: note };
+
+  } catch (e) {
+    return { correctedDate: ocrDateString, wasCorrected: false, note: '【要確認：日付処理エラー】' };
+  }
+}
+// ▲▲▲ 改善箇所 ▲▲▲
 
 function normalizeText_(text) {
   if (!text || typeof text !== 'string') return '';
@@ -196,21 +261,48 @@ function logOcrResult(receipts, originalFileId) {
       let isLearned = false;
       let finalDescription = r.description || '';
       let finalStoreName = r.storeName || '';
-      let finalNote = r.note || '';
       let finalTaxCode = r.tax_code || '';
 
-      // ▼▼▼【改善箇所】国税庁APIの呼び出しを無効化 ▼▼▼
-      if (finalTaxCode) {
-        // verifyInvoiceNumber_ は通信を行わず、常にisValid:falseで返ってくる
-        const verificationResult = verifyInvoiceNumber_(finalTaxCode);
-        finalTaxCode = verificationResult.formattedNumber;
-        // noteへの追記も行われなくなる
+      let finalAmount = Math.trunc(r.amount || 0);
+      const finalTaxAmount = Math.trunc(r.tax_amount || 0);
+      const taxRate = r.tax_rate || 0;
+      let finalNote = r.note || '';
+
+      // ▼▼▼【改善箇所】日付の自動補正ロジックを呼び出す ▼▼▼
+      const dateCorrectionResult = correctDate_(r.date);
+      const finalDate = dateCorrectionResult.correctedDate;
+      if (dateCorrectionResult.note) {
+        finalNote = `${finalNote} ${dateCorrectionResult.note}`.trim();
       }
       // ▲▲▲ 改善箇所 ▲▲▲
 
+      if (finalAmount > 0 && finalTaxAmount > 0 && (taxRate === 10 || taxRate === 8)) {
+        const calculatedTaxFromInclusive = finalAmount * taxRate / (100 + taxRate);
+        const calculatedTaxFromExclusive = finalAmount * taxRate / 100;
+        const isAlreadyInclusive = Math.abs(calculatedTaxFromInclusive - finalTaxAmount) <= 1;
+        const isExclusive = Math.abs(calculatedTaxFromExclusive - finalTaxAmount) <= 1;
+
+        if (!isAlreadyInclusive && isExclusive) {
+          const correctedAmount = finalAmount + finalTaxAmount;
+          console.log(`金額を自動補正しました。ファイル: ${originalFile.getName()}, 旧金額: ${finalAmount}, 新金額: ${correctedAmount}`);
+          finalAmount = correctedAmount;
+          finalNote = `${finalNote} [金額を自動補正]`.trim();
+        }
+      }
+
+      if (finalTaxCode) {
+        const verificationResult = verifyInvoiceNumber_(finalTaxCode);
+        finalTaxCode = verificationResult.formattedNumber;
+        if (verificationResult.isValid) {
+          finalStoreName = verificationResult.officialName;
+        } else if (verificationResult.note) {
+          finalNote = `${finalNote} ${verificationResult.note}`.trim();
+        }
+      }
+
       for (const rule of learningRules) {
         if (!rule.storeName) continue;
-        const ocrData = { storeName: normalizeStoreName(finalStoreName), description: finalDescription, amount: Number(r.amount) || 0 };
+        const ocrData = { storeName: normalizeStoreName(finalStoreName), description: finalDescription, amount: finalAmount };
         const storeMatch = ocrData.storeName.includes(rule.storeName) || rule.storeName.includes(ocrData.storeName);
         const descMatch = !rule.descriptionKeyword || ocrData.description.includes(rule.descriptionKeyword);
         let amountMatch = true;
@@ -221,7 +313,7 @@ function logOcrResult(receipts, originalFileId) {
           kanjo = rule.kanjo;
           hojo = rule.hojo;
           if (rule.descriptionTemplate) {
-            finalDescription = rule.descriptionTemplate.replace(/【日付】/g, r.date || '').replace(/【店名】/g, finalStoreName).replace(/【金額】/g, Math.trunc(r.amount || 0));
+            finalDescription = rule.descriptionTemplate.replace(/【日付】/g, finalDate).replace(/【店名】/g, finalStoreName).replace(/【金額】/g, finalAmount);
           }
           isLearned = true;
           break;
@@ -229,20 +321,17 @@ function logOcrResult(receipts, originalFileId) {
       }
 
       if (!isLearned) {
-        kanjo = inferAccountTitle(finalStoreName, finalDescription, r.amount, masterData);
+        kanjo = inferAccountTitle(finalStoreName, finalDescription, finalAmount, masterData);
         hojo = "";
       }
-
-      const truncatedAmount = Math.trunc(r.amount || 0);
-      const truncatedTaxAmount = Math.trunc(r.tax_amount || 0);
 
       const normalizedStoreName = normalizeText_(finalStoreName);
       const normalizedFinalDescription = normalizeText_(finalDescription);
 
       return [
-        Utilities.getUuid(), new Date(), r.date, normalizedStoreName, normalizedFinalDescription,
-        kanjo, hojo, r.tax_rate, truncatedAmount, truncatedTaxAmount, finalTaxCode,
-        getTaxCategoryCode(r.tax_rate, finalTaxCode),
+        Utilities.getUuid(), new Date(), finalDate, normalizedStoreName, normalizedFinalDescription,
+        kanjo, hojo, taxRate, finalAmount, finalTaxAmount, finalTaxCode,
+        getTaxCategoryCode(taxRate, finalTaxCode),
         `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`, finalNote
       ];
     });
