@@ -1,5 +1,5 @@
 // =================================================================================
-// ファイル名: Utilities.js (日付認識精度 向上版)
+// ファイル名: Utilities.js (消費税自動計算 機能追加版)
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
@@ -14,12 +14,6 @@ function verifyInvoiceNumber_(rawInvoiceNumber) {
   };
 }
 
-// ▼▼▼【改善箇所】日付を自動で検証・補正する関数を追加 ▼▼▼
-/**
- * OCRで読み取った日付文字列を検証し、不自然な場合は処理日を基準に補正する。
- * @param {string} ocrDateString - AIが読み取った日付文字列 (例: "2013/01/10", "1970/01/01")
- * @returns {object} { correctedDate: string, wasCorrected: boolean, note: string }
- */
 function correctDate_(ocrDateString) {
   if (!ocrDateString || typeof ocrDateString !== 'string') {
     return { correctedDate: ocrDateString, wasCorrected: false, note: '【要確認：日付不明】' };
@@ -27,18 +21,15 @@ function correctDate_(ocrDateString) {
 
   try {
     const processingDate = new Date();
-    // "7年1月6日" のような和暦文字列に対応するため、西暦部分を補完する前処理
     let dateStrToParse = ocrDateString.replace(/\s/g, '');
     const warekiMatch = dateStrToParse.match(/^(令和|平成|昭和|大正|明治)?(\d+|元)[年](\d+)[月](\d+)[日]/);
     
     if (warekiMatch) {
-      // 和暦が明確な場合、西暦に変換
-      // このロジックは簡易的なもので、より複雑な変換は別途必要になる可能性がある
       let year = parseInt(warekiMatch[2] === '元' ? 1 : warekiMatch[2], 10);
       const era = warekiMatch[1];
-      if (era === '令和' || (!era && year < 10)) { // 令和7年 or 7年
+      if (era === '令和' || (!era && year < 10)) {
         year += 2018;
-      } else if (era === '平成' || (!era && year > 10)) { // 平成25年 or 25年
+      } else if (era === '平成' || (!era && year > 10)) {
         year += 1988;
       }
       dateStrToParse = `${year}-${warekiMatch[3]}-${warekiMatch[4]}`;
@@ -46,11 +37,9 @@ function correctDate_(ocrDateString) {
 
     let ocrDate = new Date(dateStrToParse);
 
-    // new Date() でのパースが失敗した場合 (Invalid Date)
     if (isNaN(ocrDate.getTime())) {
-       // Unixエポックタイム (1970-01-01) になるケースもここで捕捉
        if (new Date(ocrDateString).getTime() === 0) {
-         ocrDate = new Date(); // とりあえず今日の日付にして、後のロジックで補正させる
+         ocrDate = new Date();
        } else {
          return { correctedDate: ocrDateString, wasCorrected: false, note: '【要確認：日付形式不正】' };
        }
@@ -61,16 +50,13 @@ function correctDate_(ocrDateString) {
     let correctedDate = new Date(ocrDate);
     let wasCorrected = false;
 
-    // 読取り年が、処理年の1年以上前、または未来の場合、処理年で上書きする
     if (ocrYear < processingYear - 1 || ocrYear > processingYear) {
       correctedDate.setFullYear(processingYear);
       wasCorrected = true;
     }
 
-    // 補正後の日付が未来日になっていないかチェック
-    // (例: 処理日 2025/1/5, 領収書日 2024/12/30 -> AIが2025/12/30と誤認識 -> 処理年で補正後も未来日)
     const bufferProcessingDate = new Date();
-    bufferProcessingDate.setDate(bufferProcessingDate.getDate() + 1); // 1日の猶予を持たせる
+    bufferProcessingDate.setDate(bufferProcessingDate.getDate() + 1);
 
     if (correctedDate > bufferProcessingDate) {
       correctedDate.setFullYear(correctedDate.getFullYear() - 1);
@@ -86,7 +72,6 @@ function correctDate_(ocrDateString) {
     return { correctedDate: ocrDateString, wasCorrected: false, note: '【要確認：日付処理エラー】' };
   }
 }
-// ▲▲▲ 改善箇所 ▲▲▲
 
 function normalizeText_(text) {
   if (!text || typeof text !== 'string') return '';
@@ -96,36 +81,24 @@ function normalizeText_(text) {
   result = result.replace(/[Ａ-Ｚａ-ｚ０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0));
 
   const hankakuKatakana = {
-    'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ',
-    'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
-    'ﾀﾞ': 'ダ', 'ﾁﾞ': 'ヂ', 'ﾂﾞ': 'ヅ', 'ﾃﾞ': 'デ', 'ﾄﾞ': 'ド',
-    'ﾊﾞ': 'バ', 'ﾋﾞ': 'ビ', 'ﾌﾞ': 'ブ', 'ﾍﾞ': 'ベ', 'ﾎﾞ': 'ボ',
-    'ﾊﾟ': 'パ', 'ﾋﾟ': 'ピ', 'ﾌﾟ': 'プ', 'ﾍﾟ': 'ペ', 'ﾎﾟ': 'ポ',
-    'ｳﾞ': 'ヴ', 'ﾜﾞ': 'ヷ', 'ｦﾞ': 'ヺ',
-    'ｱ': 'ア', 'ｲ': 'イ', 'ｳ': 'ウ', 'ｴ': 'エ', 'ｵ': 'オ',
-    'ｶ': 'カ', 'ｷ': 'キ', 'ｸ': 'ク', 'ｹ': 'ケ', 'ｺ': 'コ',
-    'ｻ': 'サ', 'ｼ': 'シ', 'ｽ': 'ス', 'ｾ': 'セ', 'ｿ': 'ソ',
-    'ﾀ': 'タ', 'ﾁ': 'チ', 'ﾂ': 'ツ', 'ﾃ': 'テ', 'ﾄ': 'ト',
-    'ﾅ': 'ナ', 'ﾆ': 'ニ', 'ﾇ': 'ヌ', 'ﾈ': 'ネ', 'ﾉ': 'ノ',
-    'ﾊ': 'ハ', 'ﾋ': 'ヒ', 'ﾌ': 'フ', 'ﾍ': 'ヘ', 'ﾎ': 'ホ',
-    'ﾏ': 'マ', 'ﾐ': 'ミ', 'ﾑ': 'ム', 'ﾒ': 'メ', 'ﾓ': 'モ',
-    'ﾔ': 'ヤ', 'ﾕ': 'ユ', 'ﾖ': 'ヨ',
-    'ﾗ': 'ラ', 'ﾘ': 'リ', 'ﾙ': 'ル', 'ﾚ': 'レ', 'ﾛ': 'ロ',
-    'ﾜ': 'ワ', 'ｦ': 'ヲ', 'ﾝ': 'ン',
-    'ｧ': 'ァ', 'ｨ': 'ィ', 'ｩ': 'ゥ', 'ｪ': 'ェ', 'ｫ': 'ォ',
-    'ｯ': 'ッ', 'ｬ': 'ャ', 'ｭ': 'ュ', 'ｮ': 'ョ',
-    '｡': '。', '､': '、', 'ｰ': 'ー', '｢': '「', '｣': '」', '･': '・'
+    'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ', 'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
+    'ﾀﾞ': 'ダ', 'ﾁﾞ': 'ヂ', 'ﾂﾞ': 'ヅ', 'ﾃﾞ': 'デ', 'ﾄﾞ': 'ド', 'ﾊﾞ': 'バ', 'ﾋﾞ': 'ビ', 'ﾌﾞ': 'ブ', 'ﾍﾞ': 'ベ', 'ﾎﾞ': 'ボ',
+    'ﾊﾟ': 'パ', 'ﾋﾟ': 'ピ', 'ﾌﾟ': 'プ', 'ﾍﾟ': 'ペ', 'ﾎﾟ': 'ポ', 'ｳﾞ': 'ヴ', 'ﾜﾞ': 'ヷ', 'ｦﾞ': 'ヺ', 'ｱ': 'ア', 'ｲ': 'イ',
+    'ｳ': 'ウ', 'ｴ': 'エ', 'ｵ': 'オ', 'ｶ': 'カ', 'ｷ': 'キ', 'ｸ': 'ク', 'ｹ': 'ケ', 'ｺ': 'コ', 'ｻ': 'サ', 'ｼ': 'シ', 'ｽ': 'ス',
+    'ｾ': 'セ', 'ｿ': 'ソ', 'ﾀ': 'タ', 'ﾁ': 'チ', 'ﾂ': 'ツ', 'ﾃ': 'テ', 'ﾄ': 'ト', 'ﾅ': 'ナ', 'ﾆ': 'ニ', 'ﾇ': 'ヌ', 'ﾈ': 'ネ',
+    'ﾉ': 'ノ', 'ﾊ': 'ハ', 'ﾋ': 'ヒ', 'ﾌ': 'フ', 'ﾍ': 'ヘ', 'ﾎ': 'ホ', 'ﾏ': 'マ', 'ﾐ': 'ミ', 'ﾑ': 'ム', 'ﾒ': 'メ', 'ﾓ': 'モ',
+    'ﾔ': 'ヤ', 'ﾕ': 'ユ', 'ﾖ': 'ヨ', 'ﾗ': 'ラ', 'ﾘ': 'リ', 'ﾙ': 'ル', 'ﾚ': 'レ', 'ﾛ': 'ロ', 'ﾜ': 'ワ', 'ｦ': 'ヲ', 'ﾝ': 'ン',
+    'ｧ': 'ァ', 'ｨ': 'ィ', 'ｩ': 'ゥ', 'ｪ': 'ェ', 'ｫ': 'ォ', 'ｯ': 'ッ', 'ｬ': 'ャ', 'ｭ': 'ュ', 'ｮ': 'ョ', '｡': '。', '､': '、',
+    'ｰ': 'ー', '｢': '「', '｣': '」', '･': '・'
   };
 
   const reg = new RegExp('(' + Object.keys(hankakuKatakana).join('|') + ')', 'g');
   result = result.replace(reg, s => hankakuKatakana[s]);
 
   const hankakuSymbols = {
-    '!': '！', '"': '”', '#': '＃', '$': '＄', '%': '％', '&': '＆', "'": '’',
-    '(': '（', ')': '）', '*': '＊', '+': '＋', ',': '、', '-': '－', '.': '．', '/': '／',
-    ':': '：', ';': '；', '<': '＜', '=': '＝', '>': '＞', '?': '？', '@': '＠',
-    '[': '［', '\\': '￥', ']': '］', '^': '＾', '_': '＿', '`': '‘',
-    '{': '｛', '|': '｜', '}': '｝', '~': '～'
+    '!': '！', '"': '”', '#': '＃', '$': '＄', '%': '％', '&': '＆', "'": '’', '(': '（', ')': '）', '*': '＊', '+': '＋',
+    ',': '、', '-': '－', '.': '．', '/': '／', ':': '：', ';': '；', '<': '＜', '=': '＝', '>': '＞', '?': '？', '@': '＠',
+    '[': '［', '\\': '￥', ']': '］', '^': '＾', '_': '＿', '`': '‘', '{': '｛', '|': '｜', '}': '｝', '~': '～'
   };
   const symbolReg = new RegExp('(' + Object.keys(hankakuSymbols).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g');
   result = result.replace(symbolReg, s => hankakuSymbols[s]);
@@ -264,17 +237,15 @@ function logOcrResult(receipts, originalFileId) {
       let finalTaxCode = r.tax_code || '';
 
       let finalAmount = Math.trunc(r.amount || 0);
-      const finalTaxAmount = Math.trunc(r.tax_amount || 0);
-      const taxRate = r.tax_rate || 0;
+      let finalTaxAmount = Math.trunc(r.tax_amount || 0);
+      let taxRate = r.tax_rate || 0;
       let finalNote = r.note || '';
 
-      // ▼▼▼【改善箇所】日付の自動補正ロジックを呼び出す ▼▼▼
       const dateCorrectionResult = correctDate_(r.date);
       const finalDate = dateCorrectionResult.correctedDate;
       if (dateCorrectionResult.note) {
         finalNote = `${finalNote} ${dateCorrectionResult.note}`.trim();
       }
-      // ▲▲▲ 改善箇所 ▲▲▲
 
       if (finalAmount > 0 && finalTaxAmount > 0 && (taxRate === 10 || taxRate === 8)) {
         const calculatedTaxFromInclusive = finalAmount * taxRate / (100 + taxRate);
@@ -324,6 +295,20 @@ function logOcrResult(receipts, originalFileId) {
         kanjo = inferAccountTitle(finalStoreName, finalDescription, finalAmount, masterData);
         hojo = "";
       }
+
+      // ▼▼▼【改善箇所】消費税が記載されていない場合の自動計算ロジック ▼▼▼
+      // OCRで税率も税額も読み取れなかった場合
+      if (taxRate === 0 && finalTaxAmount === 0 && finalAmount > 0) {
+        const exemptTitles = ['租税公課', '諸会費', '保険料'];
+        // 勘定科目が確定しており、かつ非課税対象リストに含まれていない場合
+        if (kanjo && !exemptTitles.includes(kanjo)) {
+          taxRate = 10; // 税率を10%とみなす
+          finalTaxAmount = Math.floor(finalAmount * 10 / 110); // 税込金額から消費税を逆算
+          finalNote = `${finalNote} [消費税を自動計算]`.trim();
+          console.log(`消費税を自動計算しました。ファイル: ${originalFile.getName()}, 勘定科目: ${kanjo}, 金額: ${finalAmount}, 計算された消費税: ${finalTaxAmount}`);
+        }
+      }
+      // ▲▲▲ 改善箇所 ▲▲▲
 
       const normalizedStoreName = normalizeText_(finalStoreName);
       const normalizedFinalDescription = normalizeText_(finalDescription);
