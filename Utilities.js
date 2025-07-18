@@ -1,5 +1,5 @@
 // =================================================================================
-// ファイル名: Utilities.js (消費税自動計算 機能追加版)
+// ファイル名: Utilities.js (消費税区分 自動設定版)
 // 役割: 様々な場所から呼び出される補助的な便利関数を管理します。
 // =================================================================================
 
@@ -296,7 +296,9 @@ function logOcrResult(receipts, originalFileId) {
         hojo = "";
       }
 
-      // ▼▼▼【改善箇所】消費税が記載されていない場合の自動計算ロジック ▼▼▼
+      // ▼▼▼【改善箇所】消費税区分を先に変数に入れておく ▼▼▼
+      let finalTaxCategory = getTaxCategoryCode(taxRate, finalTaxCode);
+
       // OCRで税率も税額も読み取れなかった場合
       if (taxRate === 0 && finalTaxAmount === 0 && finalAmount > 0) {
         const exemptTitles = ['租税公課', '諸会費', '保険料'];
@@ -304,6 +306,7 @@ function logOcrResult(receipts, originalFileId) {
         if (kanjo && !exemptTitles.includes(kanjo)) {
           taxRate = 10; // 税率を10%とみなす
           finalTaxAmount = Math.floor(finalAmount * 10 / 110); // 税込金額から消費税を逆算
+          finalTaxCategory = '共対仕入内10%区分80%'; // ★★★ 税区分を直接設定 ★★★
           finalNote = `${finalNote} [消費税を自動計算]`.trim();
           console.log(`消費税を自動計算しました。ファイル: ${originalFile.getName()}, 勘定科目: ${kanjo}, 金額: ${finalAmount}, 計算された消費税: ${finalTaxAmount}`);
         }
@@ -316,7 +319,7 @@ function logOcrResult(receipts, originalFileId) {
       return [
         Utilities.getUuid(), new Date(), finalDate, normalizedStoreName, normalizedFinalDescription,
         kanjo, hojo, taxRate, finalAmount, finalTaxAmount, finalTaxCode,
-        getTaxCategoryCode(taxRate, finalTaxCode),
+        finalTaxCategory, // ★★★ 最終的に確定した税区分を使用 ★★★
         `=HYPERLINK("${originalFile.getUrl()}","${r.filename || originalFile.getName()}")`, finalNote
       ];
     });
